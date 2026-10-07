@@ -5,6 +5,7 @@ export type PaperStatus = "uploaded" | "analyzing" | "ready" | "failed";
 export type ProblemProgress = "pending" | "active" | "done";
 export type TurnAction = "wait" | "continue" | "next" | "finish";
 export const MAX_PAPER_PAGES = 12;
+export const MAX_PAPER_TEXT_BYTES = 1_500_000;
 export const COVERAGE_TOPICS = ["solution", "knowledge", "skills", "pitfalls"] as const;
 export type CoverageTopic = (typeof COVERAGE_TOPICS)[number];
 export type TeachingCoverage = Partial<Record<CoverageTopic, string>>;
@@ -31,7 +32,7 @@ export interface ProviderSettings {
 export interface SettingsData {
   provider: ProviderId;
   providers: Record<ProviderId, ProviderSettings>;
-  fish: { apiKey: string; model: string; enabled: boolean };
+  fish: { apiKey: string; model: string; enabled: boolean; proxyUrl: string };
   autoContinue: boolean;
 }
 
@@ -52,11 +53,25 @@ export interface PublicSettings {
   fish: {
     model: string;
     enabled: boolean;
+    hasProxy: boolean;
+    proxyPreview: string;
     hasKey: boolean;
     keySource: KeySource;
     keyPreview: string;
   };
   autoContinue: boolean;
+}
+
+export interface TTSRequest {
+  text: string;
+  voiceId?: string;
+  fresh?: boolean;
+}
+
+export interface FishApiError {
+  error: string;
+  code: string;
+  upstreamStatus?: number;
 }
 
 export interface ProviderMeta {
@@ -158,6 +173,8 @@ export interface PaperDTO {
   overview: string;
   error: string | null;
   pageCount: number;
+  /** MIME types in page order, when the caller has loaded page metadata. */
+  pageMimes?: string[];
   createdAt: string;
 }
 

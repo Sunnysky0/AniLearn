@@ -14,7 +14,7 @@ Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). 
 
 ## Product charter
 
-- **EPDL (Exam Paper Driven Learning).** The exam paper is the syllabus. Upload images or PDF → AI extracts every problem, writes solutions, marks key points, and maps each item to textbook knowledge. Classroom instruction then walks the paper problem by problem.
+- **EPDL (Exam Paper Driven Learning).** The exam paper is the syllabus. Upload images, PDF, Markdown, or LaTeX → AI extracts every problem, writes solutions, marks key points, and maps each item to textbook knowledge. Classroom instruction then walks the paper problem by problem.
 - **Custom tutors.** Personality, teaching style, speaking style, subject, avatar, greeting, and Fish Audio voice (`voiceId` + Japanese `voiceStyle` tag).
 - **Models.** OpenAI / Anthropic / Grok (xAI) / Gemini, via API. No vendor SDKs — raw `fetch` + SSE in `src/lib/server/llm.ts`.
 - **Voice.** Fish Audio TTS (`s2.1-pro`). Chat and board are Chinese; spoken audio is Japanese. Text in the chat bubble reveals in sync with playback.
@@ -75,7 +75,7 @@ API (all `force-dynamic`):
 
 | Path | Role |
 | --- | --- |
-| `POST /api/papers` then `POST /api/papers/:id/pages` | Create paper; append page images (data URLs). PDF is rasterized in the browser first. |
+| `POST /api/papers` then `POST /api/papers/:id/pages` | Create paper; append images or UTF-8 Markdown/LaTeX sources as base64 data URLs. PDF is rasterized in the browser first. Each text file is one source page (max 1.5 MB). |
 | `POST /api/papers/:id/analyze` | Inventory then per-problem vision analysis, streamed as NDJSON `AnalysisEvent`. Body `{ restart?: boolean }`; default resumes saved draft. Continues after browser disconnect. |
 | `PATCH/DELETE /api/papers/:id` | Edit/delete under the paper lock. Subject cannot change after publication or while a draft exists. |
 | `POST /api/sessions` | Start classroom (`paperId` + `tutorId`). Requires complete, error-free `ready` paper; saves snapshot in a transaction. |
@@ -88,7 +88,7 @@ API (all `force-dynamic`):
 
 Settings keys: DB row `app_settings.id = 1`, else env. Provider env: `OPENAI_API_KEY`; `ANTHROPIC_API_KEY` / `CLAUDE_API_KEY`; `XAI_API_KEY` / `GROK_API_KEY`; `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`. Fish: `FISH_API_KEY` / `FISH_AUDIO_API_KEY`. Default Fish model `s2.1-pro`. Default voice `db1553e441c84b49bf250912563ec8fc`.
 
-DB (Drizzle, `src/db/schema.ts`): `app_settings`, `tutors`, `papers`, `paper_pages` (base64 image per page), `problems`, `sessions`, `messages`, `boards` (unique on session+problemIdx).
+DB (Drizzle, `src/db/schema.ts`): `app_settings`, `tutors`, `papers`, `paper_pages` (base64 image or UTF-8 text per source page, identified by MIME), `problems`, `sessions`, `messages`, `boards` (unique on session+problemIdx). Text sources use `text/markdown`, `text/x-tex`, or `application/x-tex`; send their decoded source to the LLM as text, never as an image. Do not compile TeX or resolve external file dependencies. `PaperDTO.pageMimes` is optional for legacy snapshots and enables source-aware previews.
 
 Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullable for legacy sessions), and `sessions.coverage` (default `{}`). Sync schema before running this version in another environment. Do not remove these fields or use a destructive schema reset to resolve migration issues.
 
@@ -137,6 +137,7 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 - `prepareTutorMessages` checks short Chinese text plus Japanese speech. Invalid or long messages get a repair call; Chinese repairs must preserve the original content. If repair fails, retain usable Chinese chunks with empty speech. Unrepaired Japanese chat must fail rather than appear in a Chinese bubble.
 - Short-message splitting targets 80 characters and preserves atomic formulas, bold spans, and links. One indivisible token can exceed the target. The 2-6 bubble count is a prompt target, not a hard runtime limit; preserve content during fallback.
 - Japanese board text/title is translated through a separate repair call and checked again. `/api/tts` also validates speech before contacting Fish.
+- Follow `docs/tts-emotion-tags.md`: S2/S2.1 cues use square brackets and concise free-form descriptions (Japanese descriptions are valid). Every playable tutor speech starts with a primary emotion/style cue; preserve existing cues during repair and add the tutor's base style when absent. Keep cues only in speech, with Japanese spoken text. Do not impose an English-only whitelist or silently convert S2 cues for legacy S1.
 - Muted mode must skip voice prefetch, synthesis, and replay. Use the text reveal timer directly; never wait for inaudible playback.
 - Current limits: LLM call 180 seconds, full tutor turn 270 seconds, full analysis 750 seconds, Fish request 12 seconds, browser TTS request 15 seconds. Preserve cancellation and text fallback when changing these limits.
 - On interruption, preserve all queued student inputs in order. On unmount, cancel generation/TTS, finish reveal, pause audio, clear pending work, and revoke blob URLs. Optimistic message IDs must be unique.

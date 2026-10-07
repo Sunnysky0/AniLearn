@@ -1,7 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { papers, problems } from "@/db/schema";
-import { toPaperDTO, visibleProblems } from "@/lib/server/data";
+import { paperPageMimes, toPaperDTO, visibleProblems } from "@/lib/server/data";
 import { SUBJECTS } from "@/lib/types";
 import { tryOperationLock } from "@/lib/server/locks";
 
@@ -12,10 +12,11 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function GET(_req: Request, ctx: Ctx) {
   const id = Number((await ctx.params).id);
   if (!Number.isInteger(id) || id <= 0 || id > 2147483647) return Response.json({ error: "无效的试卷 ID" }, { status: 400 });
-  const [paper] = await db.select().from(papers).where(eq(papers.id, id));
-  if (!paper) return Response.json({ error: "试卷不存在" }, { status: 404 });
+  const [row] = await db.select({ paper: papers, pageMimes: paperPageMimes() }).from(papers).where(eq(papers.id, id));
+  if (!row) return Response.json({ error: "试卷不存在" }, { status: 404 });
+  const { paper, pageMimes } = row;
   const probs = await db.select().from(problems).where(eq(problems.paperId, id)).orderBy(asc(problems.idx));
-  return Response.json({ paper: toPaperDTO(paper), problems: visibleProblems(paper, probs) });
+  return Response.json({ paper: toPaperDTO(paper, pageMimes), problems: visibleProblems(paper, probs) });
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {

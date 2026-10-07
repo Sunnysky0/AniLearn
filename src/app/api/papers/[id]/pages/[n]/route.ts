@@ -18,6 +18,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string; n:
   if (!page) return new Response("Not found", { status: 404 });
   const bytes = new Uint8Array(Buffer.from(page.data, "base64"));
   return new Response(bytes, {
-    headers: { "Content-Type": page.mime, "Cache-Control": "public, max-age=31536000, immutable" },
+    headers: {
+      "Content-Type": `${page.mime}${page.mime.startsWith("text/") || page.mime === "application/x-tex" ? "; charset=utf-8" : ""}`,
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "X-Content-Type-Options": "nosniff",
+    },
   });
 }

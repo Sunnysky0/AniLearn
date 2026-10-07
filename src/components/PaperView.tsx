@@ -20,6 +20,8 @@ import {
   X,
 } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
+import { PaperPageThumbnail } from "@/components/PaperPageThumbnail";
+import { PaperSourcePreview } from "@/components/PaperSourcePreview";
 import { PAPER_STATUS } from "@/components/PaperCard";
 import { difficultyStars, formatDate, strategyLabel } from "@/lib/text";
 import type { AnalysisEvent, PaperDTO, ProblemDTO, TutorDTO } from "@/lib/types";
@@ -74,7 +76,9 @@ export default function PaperView(props: Props) {
     setPaper((p) => ({ ...p, status: "analyzing" }));
     try {
       const res = await fetch(`/api/papers/${paper.id}/analyze`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ restart }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ restart }),
       });
       if (res.status === 409) return; // already running elsewhere – polling takes over
       if (!res.ok || !res.body) {
@@ -94,7 +98,7 @@ export default function PaperView(props: Props) {
           buf = buf.slice(nl + 1);
           if (!line) continue;
           const ev = JSON.parse(line) as AnalysisEvent;
-          if (ev.type === "paper" || ev.type === "done") setPaper(ev.paper);
+          if (ev.type === "paper" || ev.type === "done") setPaper((p) => ({ ...ev.paper, pageMimes: ev.paper.pageMimes ?? p.pageMimes }));
           else if (ev.type === "status") setPaper((p) => ({ ...p, status: ev.status }));
           else if (ev.type === "problem") setProblems((ps) => [...ps, ev.problem]);
           else if (ev.type === "progress") setChars(ev.chars);
@@ -176,15 +180,15 @@ export default function PaperView(props: Props) {
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      <Link href="/papers" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-blue-600">
+      <Link href="/papers" className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-800">
         <ArrowLeft className="h-4 w-4" /> 试卷库
       </Link>
       <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-slate-900">{paper.title}</h1>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500">
-            <span className="rounded-md bg-blue-50 px-2 py-0.5 text-blue-600">{paper.subject}</span>
-            <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${st.cls}`}>{st.label}</span>
+          <h1 className="text-[32px] font-bold text-neutral-900">{paper.title}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-neutral-500">
+            <span className="bg-neutral-100 px-2 py-0.5 text-neutral-800">{paper.subject}</span>
+            <span className={` px-2.5 py-0.5 text-xs font-medium ${st.cls}`}>{st.label}</span>
             <span>{paper.pageCount} 页</span>
             <span>·</span>
             <span>{problems.length} 道题</span>
@@ -195,28 +199,32 @@ export default function PaperView(props: Props) {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={remove}
-            className="inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm text-slate-500 hover:bg-rose-50 hover:text-rose-600"
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
           >
             <Trash2 className="h-4 w-4" /> 删除
           </button>
           <button
             onClick={() => void analyze(paper.status === "ready")}
             disabled={running}
-            className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 bg-white px-4 py-2 text-sm font-medium text-neutral-700 border border-neutral-200 hover:bg-neutral-50 disabled:opacity-50"
           >
             <RefreshCw className={`h-4 w-4 ${running ? "animate-spin" : ""}`} />
             {paper.status === "uploaded" ? "开始解析" : paper.status === "ready" ? "重新解析" : "继续解析"}
           </button>
           {paper.status === "failed" && (
-            <button onClick={() => void analyze(true)} disabled={running} title="从头重新解析"
-              className="rounded-full p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-50">
+            <button
+              onClick={() => void analyze(true)}
+              disabled={running}
+              title="从头重新解析"
+              className="p-2 text-neutral-500 hover:bg-neutral-100 disabled:opacity-50"
+            >
               <ScanSearch className="h-5 w-5" />
             </button>
           )}
           <button
             onClick={() => setPicker(true)}
             disabled={!problems.length || running || paper.status !== "ready" || !!paper.error}
-            className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-md shadow-blue-500/30 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 bg-neutral-900 px-5 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <GraduationCap className="h-4 w-4" /> 开始一对一学习
           </button>
@@ -224,20 +232,20 @@ export default function PaperView(props: Props) {
       </div>
 
       {error && (
-        <div className="mt-5 flex flex-wrap items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+        <div className="mt-5 flex flex-wrap items-center gap-3 border border-neutral-200 bg-neutral-100 p-4 text-sm text-neutral-800">
           <AlertTriangle className="h-5 w-5 shrink-0" />
           <div className="min-w-[200px] flex-1 break-all">{error}</div>
           {needsKey && (
-            <Link href="/settings" className="rounded-full bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white">
+            <Link href="/settings" className="bg-neutral-900 px-4 py-1.5 text-xs font-semibold text-white">
               前往设置
             </Link>
           )}
         </div>
       )}
       {!props.llmReady && paper.status === "uploaded" && !error && (
-        <div className="mt-5 flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+        <div className="mt-5 flex items-center gap-3 border border-neutral-200 bg-neutral-100 p-4 text-sm text-neutral-800">
           <KeyRound className="h-5 w-5" /> 尚未配置 AI 模型 API Key，配置后即可开始解析。
-          <Link href="/settings" className="ml-auto rounded-full bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white">
+          <Link href="/settings" className="ml-auto bg-neutral-900 px-4 py-1.5 text-xs font-semibold text-white">
             前往设置
           </Link>
         </div>
@@ -245,21 +253,41 @@ export default function PaperView(props: Props) {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[250px_1fr]">
         <aside className="lg:sticky lg:top-24 lg:h-[calc(100vh-7rem)] lg:overflow-y-auto thin-scroll">
+          {problems.length > 0 && (
+            <nav aria-label="试卷题目目录" className="mb-6 border-t-2 border-neutral-900 pt-4">
+              <h2 className="mb-3 text-lg font-semibold">题目目录</h2>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1">
+                {problems.map((p) => (
+                  <a
+                    key={p.id}
+                    href={`#problem-${p.id}`}
+                    className="border-b border-neutral-300 py-2 text-sm hover:bg-neutral-100"
+                  >
+                    第 {p.number} 题 <span className="text-neutral-500">{p.title}</span>
+                  </a>
+                ))}
+              </div>
+            </nav>
+          )}
           <div className="grid grid-cols-3 gap-3 lg:grid-cols-1">
             {pages.map((i) => (
               <button
                 key={i}
                 onClick={() => setPreview(i)}
-                className="relative overflow-hidden rounded-xl bg-white text-left shadow-sm ring-1 ring-slate-200 transition hover:ring-blue-400"
+                className="relative overflow-hidden bg-white text-left border border-neutral-200 transition hover:border-neutral-900"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={`/api/papers/${paper.id}/pages/${i}`} alt={`第 ${i + 1} 页`} className="w-full object-cover" />
-                <span className="absolute left-2 top-2 rounded-full bg-slate-900/70 px-2 py-0.5 text-xs text-white">
+                <PaperPageThumbnail
+                  src={`/api/papers/${paper.id}/pages/${i}`}
+                  mime={paper.pageMimes?.[i]}
+                  alt={`第 ${i + 1} 页`}
+                  className="aspect-[3/4] w-full object-cover object-top"
+                />
+                <span className="absolute left-2 top-2 bg-neutral-900/70 px-2 py-0.5 text-xs text-white">
                   第 {i + 1} 页
                 </span>
                 {(running || analyzing) && (
-                  <div className="pointer-events-none absolute inset-0 bg-blue-500/5">
-                    <div className="scan absolute inset-x-0 h-1 bg-gradient-to-r from-transparent via-sky-400 to-transparent shadow-[0_0_14px_rgba(56,189,248,.9)]" />
+                  <div className="pointer-events-none absolute inset-0 bg-neutral-900/5">
+                    <div className="scan absolute inset-x-0 h-1 bg-neutral-900" />
                   </div>
                 )}
               </button>
@@ -269,48 +297,50 @@ export default function PaperView(props: Props) {
 
         <section className="min-w-0 space-y-4">
           {(running || analyzing) && (
-            <div className="flex items-center gap-4 rounded-2xl bg-gradient-to-r from-[#13254d] to-[#1e40af] p-5 text-white shadow-lg">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10">
+            <div className="flex items-center gap-4 bg-neutral-900 p-5 text-white">
+              <div className="flex h-12 w-12 items-center justify-center bg-white/10">
                 <ScanSearch className="h-6 w-6 animate-pulse" />
               </div>
               <div className="flex-1">
                 <div className="font-semibold">AI 正在逐题解析试卷…</div>
-                <div className="mt-0.5 text-sm text-blue-100/80">
-                  已识别 {problems.length} 道题{chars ? ` · 已生成 ${chars.toLocaleString()} 字` : ""} · 识别题目、标注关键点与教材知识点
+                <div className="mt-0.5 text-sm text-neutral-200/80">
+                  已识别 {problems.length} 道题{chars ? ` · 已生成 ${chars.toLocaleString()} 字` : ""} ·
+                  识别题目、标注关键点与教材知识点
                 </div>
               </div>
-              <Loader2 className="h-6 w-6 animate-spin text-sky-300" />
+              <Loader2 className="h-6 w-6 animate-spin text-neutral-600" />
             </div>
           )}
 
           {paper.overview && (
-            <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200/70">
-              <div className="mb-3 flex items-center gap-2 font-bold text-slate-800">
-                <BookMarked className="h-5 w-5 text-blue-600" /> 试卷整体分析
+            <div className="border-t-2 border-neutral-900 py-6">
+              <div className="mb-3 flex items-center gap-2 font-bold text-neutral-800">
+                <BookMarked className="h-5 w-5 text-neutral-800" /> 试卷整体分析
               </div>
-              <Markdown className="md text-[15px] text-slate-700" content={paper.overview} />
+              <Markdown className="md text-base text-neutral-700" content={paper.overview} />
             </div>
           )}
 
           {props.sessions.length > 0 && (
-            <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
-              <div className="mb-3 font-bold text-slate-800">课堂记录</div>
+            <div className="bg-white p-5 border border-neutral-200/70">
+              <div className="mb-3 font-bold text-neutral-800">课堂记录</div>
               <div className="flex flex-wrap gap-3">
                 {props.sessions.map((s) => (
                   <Link
                     key={s.id}
                     href={`/classroom/${s.id}`}
-                    className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-200 hover:bg-blue-50 hover:ring-blue-300"
+                    className="flex items-center gap-3 bg-neutral-50 px-3 py-2 text-sm border border-neutral-200 hover:bg-neutral-100 hover:border-neutral-300"
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={s.tutorAvatar} alt="" className="h-8 w-8 rounded-full object-cover" />
+                    <img src={s.tutorAvatar} alt="" className="h-8 w-8 object-cover" />
                     <div>
-                      <div className="font-medium text-slate-700">导师 {s.tutorName}</div>
-                      <div className="text-xs text-slate-400">
-                        {s.status === "completed" ? "已完成" : `进行到第 ${s.currentIdx + 1} 题`} · {formatDate(s.updatedAt).slice(5)}
+                      <div className="font-medium text-neutral-700">导师 {s.tutorName}</div>
+                      <div className="text-xs text-neutral-500">
+                        {s.status === "completed" ? "已完成" : `进行到第 ${s.currentIdx + 1} 题`} ·{" "}
+                        {formatDate(s.updatedAt).slice(5)}
                       </div>
                     </div>
-                    <Play className="h-4 w-4 text-blue-500" />
+                    <Play className="h-4 w-4 text-neutral-800" />
                   </Link>
                 ))}
               </div>
@@ -318,33 +348,40 @@ export default function PaperView(props: Props) {
           )}
 
           {problems.map((p) => (
-            <article key={p.id} className="fade-up rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+            <article
+              id={`problem-${p.id}`}
+              key={p.id}
+              className="fade-up scroll-mt-32 border-t-2 border-neutral-900 py-6"
+            >
               <header className="flex flex-wrap items-center gap-2">
-                <span className="rounded-lg bg-blue-600 px-2.5 py-1 text-sm font-bold text-white">第 {p.number} 题</span>
-                {p.type && <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{p.type}</span>}
-                <span className="font-semibold text-slate-800">{p.title}</span>
-                <span className="ml-auto text-sm tracking-tight text-amber-500" title={`难度 ${p.difficulty}/5`}>
+                <span className="bg-neutral-900 px-2.5 py-1 text-sm font-bold text-white">第 {p.number} 题</span>
+                {p.type && <span className="bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">{p.type}</span>}
+                <span className="font-semibold text-neutral-800">{p.title}</span>
+                <span className="ml-auto text-sm text-neutral-800" title={`难度 ${p.difficulty}/5`}>
                   {difficultyStars(p.difficulty)}
                 </span>
                 <span
-                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                    p.strategy === "student_first" ? "bg-emerald-50 text-emerald-700" : "bg-violet-50 text-violet-700"
+                  className={` px-2.5 py-0.5 text-xs font-medium ${
+                    p.strategy === "student_first" ? "bg-neutral-100 text-neutral-800" : "bg-neutral-900 text-white"
                   }`}
                 >
                   {strategyLabel(p.strategy)}
                 </span>
               </header>
-              <div className="mt-3 text-[15px] text-slate-700">
+              <div className="mt-3 text-base text-neutral-700">
                 <Markdown className="md" content={p.content} />
               </div>
               {p.keyPoints.length > 0 && (
                 <div className="mt-4">
-                  <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-amber-600">
+                  <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-neutral-800">
                     <Lightbulb className="h-3.5 w-3.5" /> 解题关键点
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {p.keyPoints.map((k, i) => (
-                      <span key={i} className="rounded-lg bg-amber-50 px-2.5 py-1 text-xs text-amber-800 ring-1 ring-amber-200/70">
+                      <span
+                        key={i}
+                        className="bg-neutral-100 px-2.5 py-1 text-xs text-neutral-800 border border-neutral-200/70"
+                      >
                         <Markdown className="md" content={k} />
                       </span>
                     ))}
@@ -353,15 +390,15 @@ export default function PaperView(props: Props) {
               )}
               {p.knowledgePoints.length > 0 && (
                 <div className="mt-4">
-                  <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-blue-600">
+                  <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-neutral-800">
                     <BookMarked className="h-3.5 w-3.5" /> 关联教材知识点
                   </div>
                   <ul className="space-y-1.5">
                     {p.knowledgePoints.map((k, i) => (
-                      <li key={i} className="rounded-lg bg-blue-50/60 px-3 py-2 text-sm text-slate-700">
-                        <span className="font-semibold text-blue-700">{k.name}</span>
-                        {k.source && <span className="ml-2 text-xs text-slate-500">📖 {k.source}</span>}
-                        {k.detail && <div className="mt-0.5 text-xs text-slate-500">{k.detail}</div>}
+                      <li key={i} className="bg-neutral-100/60 px-3 py-2 text-sm text-neutral-700">
+                        <span className="font-semibold text-neutral-800">{k.name}</span>
+                        {k.source && <span className="ml-2 text-xs text-neutral-500">{k.source}</span>}
+                        {k.detail && <div className="mt-0.5 text-xs text-neutral-500">{k.detail}</div>}
                       </li>
                     ))}
                   </ul>
@@ -369,59 +406,66 @@ export default function PaperView(props: Props) {
               )}
               <button
                 onClick={() => toggle(p.id)}
-                className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:text-blue-700"
+                className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-neutral-800 hover:text-neutral-800"
               >
                 {open.has(p.id) ? "收起答案与解析" : "查看答案与解析"}
                 <ChevronDown className={`h-4 w-4 transition ${open.has(p.id) ? "rotate-180" : ""}`} />
               </button>
               {open.has(p.id) && (
-                <div className="mt-3 space-y-3 rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
+                <div className="mt-3 space-y-3 bg-neutral-50 p-4 text-sm text-neutral-700">
                   <div>
-                    <span className="font-semibold text-emerald-700">答案：</span>
+                    <span className="font-semibold text-neutral-800">答案：</span>
                     <Markdown className="md inline-block align-top" content={p.answer || "—"} />
                   </div>
                   <div>
-                    <div className="mb-1 font-semibold text-slate-800">详细解析</div>
+                    <div className="mb-1 font-semibold text-neutral-800">详细解析</div>
                     <Markdown className="md" content={p.solution || "—"} />
                   </div>
                   {p.skills.length > 0 && (
                     <div className="flex flex-wrap items-center gap-2">
-                      <Wrench className="h-4 w-4 text-slate-400" />
+                      <Wrench className="h-4 w-4 text-neutral-500" />
                       {p.skills.map((s, i) => (
-                        <span key={i} className="rounded-md bg-white px-2 py-0.5 text-xs ring-1 ring-slate-200">
+                        <span key={i} className="bg-white px-2 py-0.5 text-xs border border-neutral-200">
                           {s}
                         </span>
                       ))}
                     </div>
                   )}
                   {p.strategyReason && (
-                    <div className="text-xs text-slate-500">
+                    <div className="text-xs text-neutral-500">
                       教学策略（{strategyLabel(p.strategy)}）：{p.strategyReason}
                     </div>
                   )}
-                  {p.studentWork && <div className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">学生作答：{p.studentWork}</div>}
+                  {p.studentWork && (
+                    <div className="bg-neutral-100 p-2 text-xs text-neutral-800">学生作答：{p.studentWork}</div>
+                  )}
                 </div>
               )}
             </article>
           ))}
 
           {!problems.length && !running && !analyzing && (
-            <div className="rounded-2xl border-2 border-dashed border-slate-300 bg-white/60 p-10 text-center text-slate-500">
-              {paper.status === "failed" ? "解析失败，请检查模型设置后点击「重新解析」。" : "尚未解析。点击右上角「开始解析」。"}
+            <div className="border-2 border-dashed border-neutral-300 bg-white/60 p-10 text-center text-neutral-500">
+              {paper.status === "failed"
+                ? "解析失败，请检查模型设置后点击「重新解析」。"
+                : "尚未解析。点击右上角「开始解析」。"}
             </div>
           )}
         </section>
       </div>
 
       {picker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm" onClick={() => setPicker(false)}>
-          <div className="w-full max-w-3xl rounded-3xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-900/50 p-4"
+          onClick={() => setPicker(false)}
+        >
+          <div className="w-full max-w-3xl bg-white p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">选择你的 AI 导师</h3>
-                <p className="text-sm text-slate-500">导师会以自己的性格与教学风格，陪你逐题讲透这张试卷。</p>
+                <h3 className="text-lg font-bold text-neutral-900">选择你的 AI 导师</h3>
+                <p className="text-sm text-neutral-500">导师会以自己的性格与教学风格，陪你逐题讲透这张试卷。</p>
               </div>
-              <button onClick={() => setPicker(false)} className="rounded-full p-2 text-slate-400 hover:bg-slate-100">
+              <button onClick={() => setPicker(false)} className="p-2 text-neutral-500 hover:bg-neutral-100">
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -430,28 +474,30 @@ export default function PaperView(props: Props) {
                 <button
                   key={t.id}
                   onClick={() => setTutorId(t.id)}
-                  className={`flex gap-3 rounded-2xl p-3 text-left ring-2 transition ${
-                    tutorId === t.id ? "bg-blue-50 ring-blue-500" : "bg-slate-50 ring-transparent hover:ring-slate-200"
+                  className={`flex gap-3  p-3 text-left border-2 transition ${
+                    tutorId === t.id
+                      ? "bg-neutral-100 border-neutral-900"
+                      : "bg-neutral-50 border-transparent hover:border-neutral-200"
                   }`}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={t.avatar} alt={t.name} className="h-16 w-16 shrink-0 rounded-full object-cover" />
+                  <img src={t.avatar} alt={t.name} className="h-16 w-16 shrink-0 object-cover" />
                   <div className="min-w-0">
-                    <div className="font-bold text-slate-800">AI导师 · {t.name}</div>
-                    <div className="text-xs text-blue-600">{t.tags.join(" | ")}</div>
-                    <div className="mt-1 line-clamp-2 text-xs text-slate-500">{t.tagline || t.personality}</div>
+                    <div className="font-bold text-neutral-800">AI导师 · {t.name}</div>
+                    <div className="text-xs text-neutral-800">{t.tags.join(" | ")}</div>
+                    <div className="mt-1 line-clamp-2 text-xs text-neutral-500">{t.tagline || t.personality}</div>
                   </div>
                 </button>
               ))}
             </div>
             <div className="mt-5 flex items-center justify-between">
-              <Link href="/tutors/new" className="text-sm text-blue-600 hover:underline">
+              <Link href="/tutors/new" className="text-sm text-neutral-800 hover:underline">
                 + 创建新导师
               </Link>
               <button
                 onClick={startClass}
                 disabled={creating || !tutorId}
-                className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-sky-500 to-blue-600 px-6 py-2.5 font-semibold text-white shadow-md disabled:opacity-50"
+                className="inline-flex items-center gap-2 bg-neutral-900 px-6 py-2.5 font-semibold text-white disabled:opacity-50"
               >
                 {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} 进入教室
               </button>
@@ -461,14 +507,13 @@ export default function PaperView(props: Props) {
       )}
 
       {preview !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-4" onClick={() => setPreview(null)}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={`/api/papers/${paper.id}/pages/${preview}`}
-            alt=""
-            className="max-h-[92vh] max-w-full rounded-xl bg-white shadow-2xl"
-          />
-        </div>
+        <PaperSourcePreview
+          key={`${paper.id}-${preview}`}
+          src={`/api/papers/${paper.id}/pages/${preview}`}
+          mime={paper.pageMimes?.[preview]}
+          page={preview + 1}
+          onClose={() => setPreview(null)}
+        />
       )}
     </main>
   );

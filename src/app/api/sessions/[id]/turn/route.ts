@@ -9,7 +9,7 @@ import {
   type SessionRow,
 } from "@/lib/server/data";
 import { complete, streamChat, type LLMConfig } from "@/lib/server/llm";
-import { hasJapaneseText } from "@/lib/text";
+import { hasJapaneseText, withSpeechStyle } from "@/lib/text";
 import { buildTutorMessages, buildTutorSystem, normalizeAction } from "@/lib/server/prompts";
 import { createTagParser, innerTag, stripTags, type TagBlock } from "@/lib/server/protocol";
 import { getLLMConfig, getSettings } from "@/lib/server/settings";
@@ -132,7 +132,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
       const insertTutorMessage = async (zh: string, ja: string) => {
         const [row] = await db
           .insert(messages)
-          .values({ sessionId, role: "tutor", kind: "text", content: zh, speech: ja, problemIdx: idx })
+          .values({ sessionId, role: "tutor", kind: "text", content: zh, speech: withSpeechStyle(ja, tutor.voiceStyle), problemIdx: idx })
           .returning();
         state.count++;
         state.taught.push(zh);
@@ -148,7 +148,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
             zh = zh.split(/<ja[\s>]/i)[0].trim();
             const ja = (innerTag(b.body, "ja") ?? "").replace(/<\/?[a-z]+>/gi, "").trim();
             if (zh) {
-              const prepared = await prepareTutorMessages(cfg, zh, ja, upstream.signal);
+              const prepared = await prepareTutorMessages(cfg, zh, ja, upstream.signal, tutor.voiceStyle);
               for (const m of prepared) {
                 if (upstream.signal.aborted) return;
                 await insertTutorMessage(m.zh, m.ja);
@@ -231,7 +231,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
           // Fallback: the model ignored the tag format – split plain text into short messages.
           const stray = stripTags(parser.stray()).trim();
           if (!stray) throw new Error("模型没有返回有效内容，请重试。");
-          const prepared = await prepareTutorMessages(cfg, stray, "", upstream.signal);
+          const prepared = await prepareTutorMessages(cfg, stray, "", upstream.signal, tutor.voiceStyle);
           for (const m of prepared) await insertTutorMessage(m.zh, m.ja);
           state.action = "wait";
         }
@@ -242,7 +242,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
         const coverage = { ...(session.coverage ?? {}), [String(idx)]: state.coverage };
         if ((finalAction === "next" || finalAction === "finish") && !COVERAGE_TOPICS.every((topic) => state.coverage[topic])) {
           finalAction = "wait";
-          await insertTutorMessage("这题的讲解还没有完整覆盖。我们先补齐解法、知识点、方法和易错点，再继续。", "[優しく穏やかな口調] この問題の解説を最後まで確認してから、次へ進みましょう。");
+          await insertTutorMessage("这题的讲解还没有完整覆盖。我们先补齐解法、知识点、方法和易错点，再继续。", "この問題の解説を最後まで確認してから、次へ進みましょう。");
         }
         let updated: SessionRow = session;
         if (finalAction === "next" || finalAction === "finish") {

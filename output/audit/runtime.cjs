@@ -93,6 +93,7 @@ async function init() {
       else if (['audit-long', 'audit-repair-fail'].includes(body.model)) output = msg('这里解释方程式的移项原理。'.repeat(45)) + '<action>wait</action>';
       else if (body.model === 'audit-fallback') output = '这里解释方程式的移项原理。'.repeat(45);
       else if (body.model === 'audit-teach') output = msg('先试着解 $x+1=2$。') + board + msg('**两边减去 1**，就得到 $x=1$。') + '<action>wait</action>';
+      else if (body.model === 'audit-emotion') output = msg('先试着解 $x+1=2$。', '[curious] まず、エックスの値を求めましょう。') + board + msg('**两边减去 1**，就得到 $x=1$。', 'ここで [emphasis] 両辺から一を引きます。[break] 答えは一です。') + '<action>wait</action>';
       else if (['audit-next', 'audit-finish-full'].includes(body.model)) output = msg('这一题已经完整讲解。') + coverageBoard + coverage + '<action>finish</action>';
       else if (body.model === 'audit-forged') output = msg('我们进入下一题。') + coverage + '<action>finish</action>';
       else if (body.model === 'audit-continue') output = msg('我再给你一个提示。') + '<action>continue</action>';
@@ -101,6 +102,16 @@ async function init() {
       else if (body.model === 'audit-board-language') output = msg('看看这个知识点。') + '<board title="日本語">これは日本語の板書です。</board><action>wait</action>';
       else if (body.model === 'audit-slow') output = msg('请先独立尝试解方程。') + board + '<action>wait</action>';
       else if (body.model === 'audit-turn-error') { output = msg('请先尝试计算。') + board; ending = 'error'; }
+      if (body.model.startsWith('audit-source') && system.includes('<inventory')) {
+        const pages = Number(system.match(/全部 (\d+) 页/)?.[1] || 1);
+        const lastPage = body.model === 'audit-source-cross' ? pages : 1;
+        output = `<inventory title="文本试卷" pages="${pages}" count="2"><overview>文本来源的两道基础题。</overview><item number="1" page="1" endpage="${lastPage}">解方程 $x+1=2$。</item><item number="2" page="${pages}" endpage="${pages}">解方程 $x+2=4$。</item></inventory>`;
+      } else if (body.model.startsWith('audit-source') && inputText.includes('只解析第')) {
+        const n = Number(inputText.match(/只解析第 (\d+)/)?.[1]);
+        const page = Number(inputText.match(/起始页码 (\d+)/)?.[1]);
+        output = problem(n, n === 1 ? '解方程 $x+1=2$。' : '解方程 $x+2=4$。', String(n)).replace('page="1"', `page="${page}"`);
+        if (body.model === 'audit-source-incomplete' && n === 2) ending = 'length';
+      }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       for (let i = 0; i < output.length; i += 37) {
         res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: output.slice(i, i + 37) } }] }) + '\n\n');

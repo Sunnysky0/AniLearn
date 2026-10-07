@@ -1,7 +1,7 @@
 import { desc, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { papers, problems } from "@/db/schema";
-import { toPaperDTO } from "@/lib/server/data";
+import { paperPageMimes, toPaperDTO } from "@/lib/server/data";
 import { SUBJECTS } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -10,11 +10,12 @@ export async function GET() {
   const rows = await db
     .select({
       paper: papers,
+      pageMimes: paperPageMimes(),
       problemCount: sql<number>`(select count(*)::int from ${problems} where ${problems.paperId} = ${papers.id})`,
     })
     .from(papers)
     .orderBy(desc(papers.createdAt));
-  return Response.json(rows.map((r) => ({ ...toPaperDTO(r.paper), problemCount: Number(r.problemCount) })));
+  return Response.json(rows.map((r) => ({ ...toPaperDTO(r.paper, r.pageMimes), problemCount: Number(r.problemCount) })));
 }
 
 export async function POST(req: Request) {

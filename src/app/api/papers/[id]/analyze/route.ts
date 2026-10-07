@@ -9,6 +9,7 @@ import { parseAnalyzedProblem, parseInventory } from "@/lib/server/analysis";
 import { tryOperationLock } from "@/lib/server/locks";
 import { getLLMConfig, getSettings } from "@/lib/server/settings";
 import type { AnalyzedProblem, AnalysisDraft, AnalysisEvent } from "@/lib/types";
+import { decodePaperText, paperTextFormat } from "@/lib/paper-source";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -30,10 +31,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const body = (await req.json().catch(() => ({}))) as { restart?: boolean };
     const draft: AnalysisDraft = !body.restart && paper.analysisDraft
       ? structuredClone(paper.analysisDraft) : { inventory: null, completed: [] };
-    await db.update(papers).set({ status: "analyzing", error: null, analysisDraft: draft }).where(eq(papers.id, paperId));
+    // Keep two parts per source page so inventory page ranges select the same material.
     const allPages: LLMPart[] = pages.flatMap((pg, i) => [
-      { type: "text", text: `第 ${i + 1} 页：` }, { type: "image", mime: pg.mime, data: pg.data },
+      { type: "text", text: `第 ${i + 1} 页${paperTextFormat(pg.mime) ? `（${paperTextFormat(pg.mime)} 原文）` : ""}：` },
+      paperTextFormat(pg.mime)
+        ? { type: "text", text: decodePaperText(Buffer.from(pg.data, "base64")) }
+        : { type: "image", mime: pg.mime, data: pg.data },
     ]);
+    await db.update(papers).set({ status: "analyzing", error: null, analysisDraft: draft }).where(eq(papers.id, paperId));
     const encoder = new TextEncoder();
     let disconnected = false;
     const signal = AbortSignal.timeout(750_000);

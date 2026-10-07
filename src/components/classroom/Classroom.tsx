@@ -10,7 +10,6 @@ import {
   Image as ImageIcon,
   Lightbulb,
   Paperclip,
-  PartyPopper,
   PenLine,
   Play,
   RotateCcw,
@@ -60,7 +59,11 @@ function VoiceBars() {
   return (
     <span className="inline-flex h-3 items-end gap-[2px]">
       {[0, 1, 2, 3].map((i) => (
-        <span key={i} className="voice-bar w-[3px] rounded-full bg-blue-500" style={{ height: "100%", animationDelay: `${i * 0.12}s` }} />
+        <span
+          key={i}
+          className="voice-bar w-[3px] bg-neutral-900"
+          style={{ height: "100%", animationDelay: `${i * 0.12}s` }}
+        />
       ))}
     </span>
   );
@@ -91,23 +94,23 @@ const TutorBubble = memo(function TutorBubble({
       <div className="w-10 shrink-0">
         {showAvatar && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={avatar} alt="" className="h-10 w-10 rounded-full object-cover shadow ring-2 ring-white" />
+          <img src={avatar} alt="" className="h-10 w-10 object-cover border-2 border-white" />
         )}
       </div>
       <div className="min-w-0 max-w-[86%]">
         <div
-          className={`rounded-2xl ${showAvatar ? "rounded-tl-md" : ""} bg-[#eaf1fb] px-4 py-2.5 text-[15px] text-slate-700 shadow-sm ring-1 ring-[#dde7f5] ${
-            speaking ? "ring-blue-200" : ""
+          className={`bg-white px-3 py-2.5 text-base text-neutral-900 border border-neutral-300 ${
+            speaking ? "border-neutral-200" : ""
           }`}
         >
           <Markdown className="md" content={text || "\u200b"} />
         </div>
-        <div className="mt-1 flex h-4 items-center gap-2 pl-1 text-[11px] text-slate-400">
+        <div className="mt-1 flex h-4 items-center gap-2 pl-1 text-[11px] text-neutral-500">
           {speaking ? <VoiceBars /> : showTime ? <span>{formatTime(m.createdAt)}</span> : null}
           {canReplay && m.speech && !speaking && (
             <button
               onClick={() => onReplay(m)}
-              className="opacity-0 transition hover:text-blue-500 group-hover:opacity-100"
+              className="opacity-0 transition hover:text-neutral-800 group-hover:opacity-100"
               title="重播语音"
             >
               <Volume2 className="h-3.5 w-3.5" />
@@ -127,31 +130,34 @@ function UserBubble({ m, showTime }: { m: MessageDTO; showTime: boolean }) {
           <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
             {m.attachments.map((a, i) => (
               // eslint-disable-next-line @next/next/no-img-element
-              <img key={i} src={a} alt="" className="h-24 rounded-xl object-cover ring-1 ring-slate-200" />
+              <img key={i} src={a} alt="" className="h-24 object-cover border border-neutral-200" />
             ))}
           </div>
         )}
         {m.content && (
-          <div className="rounded-2xl rounded-tr-md bg-gradient-to-br from-[#5b9bff] to-[#3a7af2] px-4 py-2.5 text-[15px] text-white shadow-md shadow-blue-500/20">
-            <Markdown className="md md-invert" content={m.content} />
+          <div className="border border-neutral-300 bg-neutral-100 px-3 py-2.5 text-base text-neutral-900">
+            <Markdown className="md" content={m.content} />
           </div>
         )}
-        {showTime && <div className="mt-1 pr-1 text-[11px] text-slate-400">{formatTime(m.createdAt)}</div>}
+        {showTime && <div className="mt-1 pr-1 text-[11px] text-neutral-500">{formatTime(m.createdAt)}</div>}
       </div>
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#5b9bff] to-[#3a7af2] text-white shadow">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-neutral-300 bg-neutral-100 text-neutral-900">
         <User className="h-5 w-5" />
       </div>
     </div>
   );
 }
 
-function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
     <button
       onClick={() => onChange(!on)}
-      className={`relative h-5 w-9 shrink-0 rounded-full transition ${on ? "bg-blue-600" : "bg-slate-300"}`}
+      className={`flex h-5 w-5 shrink-0 items-center justify-center border border-neutral-900 ${on ? "bg-neutral-900 text-white" : "bg-white"}`}
+      role="checkbox"
+      aria-label={label}
+      aria-checked={on}
     >
-      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${on ? "left-[18px]" : "left-0.5"}`} />
+      {on && <Check className="h-4 w-4" />}
     </button>
   );
 }
@@ -181,6 +187,7 @@ export default function Classroom(props: Props) {
   const [overlay, setOverlay] = useState<BoardOverlay>("none");
   const [showOutline, setShowOutline] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [mobilePanel, setMobilePanel] = useState<"chat" | "board">("chat");
 
   const queueRef = useRef<QueueItem[]>([]);
   const pumpingRef = useRef(false);
@@ -239,7 +246,7 @@ export default function Classroom(props: Props) {
   useEffect(() => {
     const el = listRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [messages, typing, busy, waitingTTS, error]);
+  }, [messages, typing, busy, waitingTTS, error, mobilePanel]);
 
   const safeIdx = Math.min(Math.max(session.currentIdx, 0), Math.max(problems.length - 1, 0));
   const current = problems[safeIdx];
@@ -284,8 +291,14 @@ export default function Classroom(props: Props) {
         audioUrls.current.add(url);
         return url;
       } catch (e) {
-        if (!ac.signal.aborted && !disposedRef.current) setTtsError(e instanceof Error && e.name === "TimeoutError"
-          ? "语音等待超时，已切换为文字显示。" : e instanceof Error ? e.message : String(e));
+        if (!ac.signal.aborted && !disposedRef.current)
+          setTtsError(
+            e instanceof Error && e.name === "TimeoutError"
+              ? "语音等待超时，已切换为文字显示。"
+              : e instanceof Error
+                ? e.message
+                : String(e),
+          );
         ttsCache.current.delete(m.id);
         return null;
       } finally {
@@ -465,12 +478,13 @@ export default function Classroom(props: Props) {
     setError(null);
     if (!pumpingRef.current) setBusy("thinking");
     try {
-      const request = () => fetch(`/api/sessions/${props.session.id}/turn`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, images }),
-        signal: ac.signal,
-      });
+      const request = () =>
+        fetch(`/api/sessions/${props.session.id}/turn`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, images }),
+          signal: ac.signal,
+        });
       let res = await request();
       for (let attempt = 0; res.status === 409 && attempt < 8 && !ac.signal.aborted; attempt++) {
         await sleep(250);
@@ -499,7 +513,13 @@ export default function Classroom(props: Props) {
             continue;
           }
           if (ev.type === "user") continue;
-          if (ev.type === "message" && props.ttsAvailable && ev.message.speech && !flushRef.current && !prefs.current.muted) {
+          if (
+            ev.type === "message" &&
+            props.ttsAvailable &&
+            ev.message.speech &&
+            !flushRef.current &&
+            !prefs.current.muted
+          ) {
             void getAudio(ev.message); // prefetch voice while earlier messages are still playing
           }
           queueRef.current.push(ev);
@@ -571,11 +591,12 @@ export default function Classroom(props: Props) {
     }
     autoCountRef.current = 0;
     try {
-      const request = () => fetch(`/api/sessions/${props.session.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currentIdx: i }),
-      });
+      const request = () =>
+        fetch(`/api/sessions/${props.session.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ currentIdx: i }),
+        });
       let r = await request();
       for (let attempt = 0; r.status === 409 && attempt < 8 && !disposedRef.current; attempt++) {
         await sleep(250);
@@ -642,7 +663,10 @@ export default function Classroom(props: Props) {
   }
 
   function exportNotes() {
-    const parts: string[] = [`# ${paper.title} · 板书笔记`, `> 导师：${tutor.name} ｜ 导出时间：${new Date().toLocaleString()}`];
+    const parts: string[] = [
+      `# ${paper.title} · 板书笔记`,
+      `> 导师：${tutor.name} ｜ 导出时间：${new Date().toLocaleString()}`,
+    ];
     problems.forEach((p, i) => {
       const b = boards[i];
       if (!b?.blocks.length) return;
@@ -662,9 +686,9 @@ export default function Classroom(props: Props) {
 
   if (!current) {
     return (
-      <div className="flex h-screen items-center justify-center text-slate-500">
+      <div className="flex h-screen items-center justify-center text-neutral-500">
         这份试卷还没有解析出题目。
-        <Link href={`/papers/${paper.id}`} className="ml-2 text-blue-600 underline">
+        <Link href={`/papers/${paper.id}`} className="ml-2 text-neutral-800 underline">
           返回试卷
         </Link>
       </div>
@@ -672,44 +696,55 @@ export default function Classroom(props: Props) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#e7edf6] lg:h-screen">
+    <div className="classroom-shell flex flex-col bg-[#fafafa]">
       {/* ---------------- top bar ---------------- */}
-      <header className="relative z-30 flex h-14 shrink-0 items-center gap-4 bg-gradient-to-r from-[#10204a] via-[#1a3166] to-[#10204a] px-4 text-white shadow-lg">
+      <header className="relative z-30 flex h-14 shrink-0 items-center gap-2 border-b-2 border-neutral-900 bg-[#fafafa] px-3 text-neutral-900 sm:gap-4 sm:px-4">
         <Link href="/" className="flex shrink-0 items-center gap-2">
           <Logo className="h-8 w-8" />
           <div className="leading-tight">
-            <div className="font-bold tracking-wide">AniLearn</div>
-            <div className="text-[9px] tracking-[0.18em] text-blue-200/80">AI 一对一课堂</div>
+            <div className="font-serif font-bold">AniLearn</div>
+            <div className="text-[10px] text-neutral-600">一对一课堂</div>
           </div>
         </Link>
-        <span className="hidden text-sm text-blue-100/70 xl:block">你的专属AI导师</span>
         <div className="flex min-w-0 flex-1 items-center justify-center gap-4">
           <span className="truncate font-semibold">
             高中{paper.subject} · {paper.title}
           </span>
-          <span className="hidden h-5 w-px bg-white/25 md:block" />
-          <span className="hidden truncate text-blue-100 md:block">
+          <span className="hidden h-5 w-px bg-neutral-300 md:block" />
+          <span className="hidden truncate text-neutral-600 md:block">
             第 {current.number} 题{current.title ? ` · ${current.title}` : ""}
           </span>
         </div>
-        <button onClick={() => setShowOutline(true)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/10">
+        <button
+          onClick={() => setShowOutline(true)}
+          title="课程目录"
+          className="flex shrink-0 items-center gap-1.5 p-2 text-sm hover:bg-neutral-100"
+        >
           <BookOpen className="h-4 w-4" /> <span className="hidden sm:inline">课程目录</span>
         </button>
         <div className="relative">
-          <button onClick={() => setShowMenu((v) => !v)} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/10">
+          <button
+            onClick={() => setShowMenu((v) => !v)}
+            title="课堂设置"
+            className="flex items-center gap-1.5 p-2 text-sm hover:bg-neutral-100"
+          >
             <Settings className="h-4 w-4" /> <span className="hidden sm:inline">设置</span>
           </button>
           {showMenu && (
-            <div className="absolute right-0 top-11 w-72 space-y-3 rounded-2xl bg-white p-4 text-sm text-slate-700 shadow-2xl ring-1 ring-slate-200">
+            <div className="absolute right-0 top-11 w-72 space-y-3 bg-white p-4 text-sm text-neutral-700 border border-neutral-200">
               <div className="flex items-center justify-between">
                 <span>语音播放</span>
-                <Toggle on={!muted} onChange={(v) => setMuted(!v)} />
+                <Toggle on={!muted} onChange={(v) => setMuted(!v)} label="语音播放" />
               </div>
               <div className="flex items-center justify-between">
                 <span>语速</span>
-                <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs">
+                <div className="flex bg-neutral-100 p-0.5 text-xs">
                   {[1, 1.25, 1.5].map((r) => (
-                    <button key={r} onClick={() => setRate(r)} className={`rounded-md px-2 py-1 ${rate === r ? "bg-white font-semibold text-blue-600 shadow" : ""}`}>
+                    <button
+                      key={r}
+                      onClick={() => setRate(r)}
+                      className={` px-2 py-1 ${rate === r ? "bg-white font-semibold text-neutral-800 " : ""}`}
+                    >
                       {r}x
                     </button>
                   ))}
@@ -717,46 +752,82 @@ export default function Classroom(props: Props) {
               </div>
               <div className="flex items-center justify-between">
                 <span>导师连续讲解</span>
-                <Toggle on={autoContinue} onChange={setAutoContinue} />
+                <Toggle on={autoContinue} onChange={setAutoContinue} label="导师连续讲解" />
               </div>
-              <div className="border-t border-slate-100 pt-3 text-xs">
-                {!props.ttsAvailable && <p className="mb-2 text-amber-600">未配置 Fish Audio，当前为纯文字模式。</p>}
-                <Link href="/settings" className="block py-1 text-blue-600 hover:underline">
+              <div className="border-t border-neutral-100 pt-3 text-xs">
+                {!props.ttsAvailable && <p className="mb-2 text-neutral-800">未配置 Fish Audio，当前为纯文字模式。</p>}
+                <Link href="/settings" className="block py-1 text-neutral-800 hover:underline">
                   模型与语音设置 →
                 </Link>
-                <Link href={`/papers/${paper.id}`} className="block py-1 text-blue-600 hover:underline">
+                <Link href={`/papers/${paper.id}`} className="block py-1 text-neutral-800 hover:underline">
                   返回试卷解析 →
                 </Link>
               </div>
             </div>
           )}
         </div>
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-sky-400 to-blue-600 ring-2 ring-white/30">
-          <User className="h-5 w-5" />
-        </div>
       </header>
 
+      <div
+        role="tablist"
+        aria-label="课堂视图"
+        onKeyDown={(e) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+          e.preventDefault();
+          const panel =
+            e.key === "Home" ? "chat" : e.key === "End" ? "board" : mobilePanel === "chat" ? "board" : "chat";
+          setMobilePanel(panel);
+          document.getElementById(`${panel}-tab`)?.focus();
+        }}
+        className="flex shrink-0 border-b border-neutral-900 lg:hidden"
+      >
+        <button
+          id="chat-tab"
+          role="tab"
+          tabIndex={mobilePanel === "chat" ? 0 : -1}
+          aria-controls="chat-panel"
+          aria-selected={mobilePanel === "chat"}
+          onClick={() => setMobilePanel("chat")}
+          className={`flex-1 border-r border-neutral-900 py-2.5 text-sm font-medium ${mobilePanel === "chat" ? "bg-neutral-900 text-white" : "bg-[#fafafa] text-neutral-900"}`}
+        >
+          对话
+        </button>
+        <button
+          id="board-tab"
+          role="tab"
+          tabIndex={mobilePanel === "board" ? 0 : -1}
+          aria-controls="board-panel"
+          aria-selected={mobilePanel === "board"}
+          onClick={() => setMobilePanel("board")}
+          className={`flex-1 py-2.5 text-sm font-medium ${mobilePanel === "board" ? "bg-neutral-900 text-white" : "bg-[#fafafa] text-neutral-900"}`}
+        >
+          板书
+        </button>
+      </div>
+
       {/* ---------------- main ---------------- */}
-      <main className="flex min-h-0 flex-1 flex-col gap-3 p-3 lg:flex-row">
+      <main className="classroom-main">
         {/* chat */}
-        <section className="flex h-[78vh] flex-col overflow-hidden rounded-2xl bg-[#f5f8fd] shadow-sm ring-1 ring-white lg:h-auto lg:w-[31%] lg:min-w-[360px] lg:max-w-[460px]">
-          <div className="flex items-center gap-4 border-b border-slate-200/60 bg-white/70 px-5 py-4">
+        <section
+          id="chat-panel"
+          aria-labelledby="chat-tab"
+          className={`classroom-chat flex flex-col overflow-hidden bg-[#fafafa] ${mobilePanel !== "chat" ? "classroom-panel-hidden" : ""}`}
+        >
+          <div className="flex items-center gap-4 border-b border-neutral-200/60 bg-white/70 px-5 py-4">
             <div className="relative shrink-0">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={tutor.avatar} alt={tutor.name} className="h-16 w-16 rounded-full object-cover ring-4 ring-blue-100" />
-              {speakingNow && <span className="absolute inset-0 animate-ping rounded-full ring-4 ring-blue-400/40" />}
+              <img src={tutor.avatar} alt={tutor.name} className="h-16 w-16 object-cover border-2 border-neutral-100" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 text-lg font-bold text-slate-800">
-                AI导师 · {tutor.name}
-                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+              <div className="flex flex-wrap items-center gap-2 font-serif text-lg font-semibold text-neutral-900">
+                {tutor.name}
                 {speakingNow && <VoiceBars />}
               </div>
-              <div className="truncate text-sm text-slate-500">{tutor.tags.join(" | ") || tutor.subject}</div>
+              <div className="truncate text-sm text-neutral-500">{tutor.tags.join(" | ") || tutor.subject}</div>
             </div>
             <button
               onClick={() => setMuted((v) => !v)}
-              className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-blue-600"
+              className="p-2 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
               title={muted ? "开启语音" : "静音"}
             >
               {muted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
@@ -767,13 +838,14 @@ export default function Classroom(props: Props) {
             onClick={() => {
               setViewIdx(safeIdx);
               setOverlay((o) => (o === "problem" ? "none" : "problem"));
+              setMobilePanel("board");
             }}
-            className="mx-4 mt-3 flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-left text-xs shadow-sm ring-1 ring-slate-200/70 transition hover:ring-blue-300"
+            className="mx-4 mt-3 flex items-center gap-2 bg-white px-3 py-2 text-left text-xs border border-neutral-200/70 transition hover:border-neutral-300"
           >
-            <span className="shrink-0 rounded-md bg-blue-600 px-1.5 py-0.5 font-bold text-white">第 {current.number} 题</span>
-            <span className="line-clamp-1 flex-1 text-slate-600">{current.title || current.type}</span>
-            <span className="shrink-0 text-amber-500">{difficultyStars(current.difficulty)}</span>
-            <span className="shrink-0 text-blue-600">{overlay === "problem" ? "收起" : "查看题目"}</span>
+            <span className="shrink-0 bg-neutral-900 px-1.5 py-0.5 font-bold text-white">第 {current.number} 题</span>
+            <span className="line-clamp-1 flex-1 text-neutral-600">{current.title || current.type}</span>
+            <span className="shrink-0 text-neutral-800">{difficultyStars(current.difficulty)}</span>
+            <span className="shrink-0 text-neutral-800">{overlay === "problem" ? "收起" : "查看题目"}</span>
           </button>
 
           <div
@@ -788,11 +860,11 @@ export default function Classroom(props: Props) {
               if (m.kind === "problem") {
                 return (
                   <div key={m.id} className="my-4 flex items-center gap-3">
-                    <div className="h-px flex-1 bg-slate-200" />
-                    <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-blue-600 shadow-sm ring-1 ring-blue-100">
-                      📘 {m.content}
+                    <div className="h-px flex-1 bg-neutral-200" />
+                    <span className="bg-white px-3 py-1 text-xs font-medium text-neutral-800 border border-neutral-100">
+                      {m.content}
                     </span>
-                    <div className="h-px flex-1 bg-slate-200" />
+                    <div className="h-px flex-1 bg-neutral-200" />
                   </div>
                 );
               }
@@ -800,8 +872,11 @@ export default function Classroom(props: Props) {
                 return (
                   <div key={m.id} className="mt-1.5 flex justify-center">
                     <button
-                      onClick={() => setViewIdx(m.problemIdx)}
-                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] text-slate-400 hover:bg-white hover:text-blue-500"
+                      onClick={() => {
+                        setViewIdx(m.problemIdx);
+                        setMobilePanel("board");
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] text-neutral-500 hover:bg-white hover:text-neutral-800"
                     >
                       <PenLine className="h-3 w-3" /> 老师{m.speech === "replace" ? "重写" : "更新"}了板书
                     </button>
@@ -833,22 +908,25 @@ export default function Classroom(props: Props) {
                   showAvatar={!isTutorText(prev)}
                   showTime={!isTutorText(next)}
                   shown={typing && typing.id === m.id ? typing.shown : null}
-                  canReplay={props.ttsAvailable}
+                  canReplay={props.ttsAvailable && !muted}
                   onReplay={replay}
                 />
               );
             })}
 
             {session.status === "completed" && busy === "idle" && (
-              <div className="fade-up mt-5 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 p-4 text-center ring-1 ring-amber-200">
-                <PartyPopper className="mx-auto h-7 w-7 text-amber-500" />
-                <div className="mt-1 font-bold text-amber-800">整张试卷已学完！</div>
-                <div className="mt-1 text-xs text-amber-700">记得导出板书笔记，过几天再回顾一遍效果更好～</div>
+              <div className="fade-up mt-5 border-y-2 border-neutral-900 py-5 text-center">
+                <Check className="mx-auto h-7 w-7 text-neutral-900" />
+                <div className="mt-2 font-serif text-lg font-semibold text-neutral-900">整张试卷已学完</div>
+                <div className="mt-2 text-xs text-neutral-600">板书笔记已整理，可导出复习。</div>
                 <div className="mt-3 flex justify-center gap-2">
-                  <button onClick={exportNotes} className="rounded-full bg-amber-500 px-4 py-1.5 text-xs font-semibold text-white">
+                  <button onClick={exportNotes} className="bg-neutral-900 px-4 py-1.5 text-xs font-semibold text-white">
                     导出笔记
                   </button>
-                  <Link href={`/papers/${paper.id}`} className="rounded-full bg-white px-4 py-1.5 text-xs text-amber-700 ring-1 ring-amber-200">
+                  <Link
+                    href={`/papers/${paper.id}`}
+                    className="bg-white px-4 py-1.5 text-xs text-neutral-800 border border-neutral-200"
+                  >
                     返回试卷
                   </Link>
                 </div>
@@ -856,7 +934,7 @@ export default function Classroom(props: Props) {
             )}
 
             {error && (
-              <div className="fade-up mt-4 rounded-xl bg-rose-50 p-3 text-xs text-rose-700 ring-1 ring-rose-200">
+              <div className="fade-up mt-4 bg-neutral-100 p-3 text-xs text-neutral-800 border border-neutral-200">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                   <span className="flex-1 break-all">{error}</span>
@@ -867,12 +945,12 @@ export default function Classroom(props: Props) {
                       setError(null);
                       void startTurn({});
                     }}
-                    className="inline-flex items-center gap-1 rounded-full bg-rose-600 px-3 py-1 text-white"
+                    className="inline-flex items-center gap-1 bg-neutral-900 px-3 py-1 text-white"
                   >
                     <RotateCcw className="h-3 w-3" /> 重试
                   </button>
                   {/API Key/i.test(error) && (
-                    <Link href="/settings" className="rounded-full bg-white px-3 py-1 ring-1 ring-rose-200">
+                    <Link href="/settings" className="bg-white px-3 py-1 border border-neutral-200">
                       前往设置
                     </Link>
                   )}
@@ -882,7 +960,7 @@ export default function Classroom(props: Props) {
           </div>
 
           {showTyping && (
-            <div className="flex items-center gap-2 px-5 pb-1.5 text-xs text-slate-400">
+            <div className="flex items-center gap-2 px-5 pb-1.5 text-xs text-neutral-500">
               <span className="flex gap-1">
                 <i className="typing-dot" />
                 <i className="typing-dot" />
@@ -892,7 +970,7 @@ export default function Classroom(props: Props) {
             </div>
           )}
           {ttsError && (
-            <div className="mx-4 mb-1.5 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 text-[11px] text-amber-700">
+            <div className="mx-4 mb-1.5 flex items-center gap-2 bg-neutral-100 px-3 py-1.5 text-[11px] text-neutral-800">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               <span className="line-clamp-2 flex-1">语音不可用：{ttsError}</span>
               <button onClick={() => setTtsError(null)}>
@@ -901,13 +979,13 @@ export default function Classroom(props: Props) {
             </div>
           )}
 
-          <div className="border-t border-slate-200/60 bg-white/70 p-3">
+          <div className="border-t border-neutral-200/60 bg-white/70 p-3">
             <div className="thin-scroll mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
               {QUICK.map((q) => (
                 <button
                   key={q}
                   onClick={() => send(q)}
-                  className="shrink-0 rounded-full bg-white px-3 py-1 text-xs text-slate-600 ring-1 ring-slate-200 transition hover:bg-blue-50 hover:text-blue-600 hover:ring-blue-200"
+                  className="shrink-0 bg-white px-3 py-1 text-xs text-neutral-600 border border-neutral-200 transition hover:bg-neutral-100 hover:text-neutral-800 hover:border-neutral-200"
                 >
                   {q}
                 </button>
@@ -915,22 +993,22 @@ export default function Classroom(props: Props) {
               {busy !== "idle" && (
                 <button
                   onClick={stop}
-                  className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500 hover:bg-rose-50 hover:text-rose-600"
+                  className="ml-auto inline-flex shrink-0 items-center gap-1 bg-neutral-100 px-3 py-1 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
                 >
                   <Square className="h-3 w-3" /> 停止讲解
                 </button>
               )}
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm transition focus-within:border-blue-300 focus-within:ring-4 focus-within:ring-blue-50">
+            <div className="border border-neutral-200 bg-white p-2 transition">
               {attachments.length > 0 && (
                 <div className="flex flex-wrap gap-2 px-1 pb-2">
                   {attachments.map((a, i) => (
                     <div key={i} className="relative">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={a} alt="" className="h-16 w-16 rounded-lg object-cover ring-1 ring-slate-200" />
+                      <img src={a} alt="" className="h-16 w-16 object-cover border border-neutral-200" />
                       <button
                         onClick={() => setAttachments((as) => as.filter((_, j) => j !== i))}
-                        className="absolute -right-1.5 -top-1.5 rounded-full bg-slate-700 p-0.5 text-white"
+                        className="absolute -right-1.5 -top-1.5 bg-neutral-700 p-0.5 text-white"
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -939,6 +1017,7 @@ export default function Classroom(props: Props) {
                 </div>
               )}
               <textarea
+                aria-label="课堂消息"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -949,25 +1028,44 @@ export default function Classroom(props: Props) {
                 }}
                 rows={2}
                 placeholder="输入你的问题，或发送“继续讲解”…"
-                className="w-full resize-none bg-transparent px-2 py-1 text-sm text-slate-700 outline-none placeholder:text-slate-400"
+                className="w-full resize-none bg-transparent px-2 py-1 text-sm text-neutral-700 outline-none placeholder:text-neutral-500"
               />
               <div className="flex items-center gap-1 px-1">
-                <button onClick={() => fileRef.current?.click()} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-blue-600" title="上传解题草稿图片">
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  className="p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
+                  title="上传解题草稿图片"
+                >
                   <Paperclip className="h-5 w-5" />
                 </button>
-                <button onClick={() => camRef.current?.click()} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-blue-600" title="拍照上传">
+                <button
+                  onClick={() => camRef.current?.click()}
+                  className="p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
+                  title="拍照上传"
+                >
                   <ImageIcon className="h-5 w-5" />
                 </button>
-                <button onClick={() => send("给我一点提示")} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-amber-500" title="请求提示">
+                <button
+                  onClick={() => send("给我一点提示")}
+                  className="p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
+                  title="请求提示"
+                >
                   <Lightbulb className="h-5 w-5" />
                 </button>
                 <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onPickImages} />
-                <input ref={camRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onPickImages} />
-                <span className="ml-auto hidden text-[11px] text-slate-300 sm:inline">Enter 发送 · Shift+Enter 换行</span>
+                <input
+                  ref={camRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={onPickImages}
+                />
                 <button
                   onClick={() => send(input, attachments)}
                   disabled={!input.trim() && !attachments.length}
-                  className="ml-2 flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-[#4f8ff7] to-[#2f6fe8] text-white shadow-md shadow-blue-500/30 transition hover:brightness-110 disabled:opacity-40"
+                  title="发送消息"
+                  className="ml-auto flex h-10 w-10 items-center justify-center bg-neutral-900 text-white transition hover:brightness-110 disabled:opacity-40"
                 >
                   <Send className="h-4 w-4" />
                 </button>
@@ -977,7 +1075,11 @@ export default function Classroom(props: Props) {
         </section>
 
         {/* blackboard */}
-        <section className="h-[80vh] min-w-0 lg:h-auto lg:flex-1">
+        <section
+          id="board-panel"
+          aria-labelledby="board-tab"
+          className={`classroom-board ${mobilePanel !== "board" ? "classroom-panel-hidden" : ""}`}
+        >
           <Blackboard
             paperId={paper.id}
             paperTitle={paper.title}
@@ -997,25 +1099,25 @@ export default function Classroom(props: Props) {
 
       {/* ---------------- outline drawer ---------------- */}
       {showOutline && (
-        <div className="fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-[1px]" onClick={() => setShowOutline(false)}>
+        <div className="fixed inset-0 z-40 bg-neutral-900/30" onClick={() => setShowOutline(false)}>
           <aside
-            className="thin-scroll absolute right-0 top-0 h-full w-full max-w-sm overflow-y-auto bg-white p-5 shadow-2xl"
+            className="thin-scroll absolute right-0 top-0 h-full w-full max-w-sm overflow-y-auto bg-white p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">课程目录</h3>
-                <p className="text-xs text-slate-500">
+                <h3 className="text-lg font-bold text-neutral-900">课程目录</h3>
+                <p className="text-xs text-neutral-500">
                   已完成 {doneCount}/{problems.length} 题 · 点击可跳转到任意一题
                 </p>
               </div>
-              <button onClick={() => setShowOutline(false)} className="rounded-full p-2 text-slate-400 hover:bg-slate-100">
+              <button onClick={() => setShowOutline(false)} className="p-2 text-neutral-500 hover:bg-neutral-100">
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+            <div className="mt-3 h-1.5 overflow-hidden bg-neutral-100">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-sky-400 to-blue-600"
+                className="h-full bg-neutral-900"
                 style={{ width: `${Math.round((doneCount / Math.max(problems.length, 1)) * 100)}%` }}
               />
             </div>
@@ -1027,25 +1129,37 @@ export default function Classroom(props: Props) {
                   <button
                     key={p.id}
                     onClick={() => void gotoProblem(i)}
-                    className={`flex w-full items-start gap-3 rounded-xl p-3 text-left ring-1 transition ${
-                      isCur ? "bg-blue-50 ring-blue-300" : "ring-slate-200 hover:bg-slate-50"
+                    className={`flex w-full items-start gap-3  p-3 text-left border transition ${
+                      isCur ? "bg-neutral-100 border-neutral-300" : "border-neutral-200 hover:bg-neutral-50"
                     }`}
                   >
                     <span
-                      className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs ${
-                        st === "done" ? "bg-emerald-500 text-white" : isCur ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-400"
+                      className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center  text-xs ${
+                        st === "done"
+                          ? "bg-neutral-900 text-white"
+                          : isCur
+                            ? "bg-neutral-900 text-white"
+                            : "bg-neutral-100 text-neutral-500"
                       }`}
                     >
-                      {st === "done" ? <Check className="h-3.5 w-3.5" /> : isCur ? <Play className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+                      {st === "done" ? (
+                        <Check className="h-3.5 w-3.5" />
+                      ) : isCur ? (
+                        <Play className="h-3 w-3" />
+                      ) : (
+                        <Circle className="h-3 w-3" />
+                      )}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold text-slate-800">
-                        第 {p.number} 题 <span className="font-normal text-slate-500">{p.type}</span>
+                      <div className="text-sm font-semibold text-neutral-800">
+                        第 {p.number} 题 <span className="font-normal text-neutral-500">{p.type}</span>
                       </div>
-                      <div className="line-clamp-1 text-xs text-slate-500">{p.title}</div>
+                      <div className="line-clamp-1 text-xs text-neutral-500">{p.title}</div>
                       <div className="mt-1 flex items-center gap-2 text-[11px]">
-                        <span className="text-amber-500">{difficultyStars(p.difficulty)}</span>
-                        <span className={p.strategy === "student_first" ? "text-emerald-600" : "text-violet-600"}>{strategyLabel(p.strategy)}</span>
+                        <span className="text-neutral-800">{difficultyStars(p.difficulty)}</span>
+                        <span className={p.strategy === "student_first" ? "text-neutral-800" : "text-violet-600"}>
+                          {strategyLabel(p.strategy)}
+                        </span>
                       </div>
                     </div>
                   </button>
@@ -1058,22 +1172,26 @@ export default function Classroom(props: Props) {
 
       {/* ---------------- enter overlay (unlocks audio) ---------------- */}
       {!entered && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b1630]/70 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md overflow-hidden rounded-3xl bg-white text-center shadow-2xl">
-            <div className="bg-gradient-to-br from-[#13254d] to-[#2563eb] px-6 pb-14 pt-8 text-white">
-              <div className="text-[10px] tracking-[0.35em] text-blue-200">ANILEARN CLASSROOM</div>
-              <div className="mt-2 text-xl font-bold">{paper.title}</div>
-              <div className="mt-1 text-sm text-blue-100/80">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#171717]/70 p-4">
+          <div className="w-full max-w-md overflow-hidden bg-white text-center">
+            <div className="border-b-2 border-neutral-900 px-6 py-6 text-neutral-900">
+              <div className="font-serif text-sm">AniLearn</div>
+              <h2 className="mt-3 text-xl font-semibold">{paper.title}</h2>
+              <div className="mt-2 text-sm text-neutral-600">
                 共 {problems.length} 题 · {session.status === "completed" ? "已全部完成" : `当前第 ${safeIdx + 1} 题`}
               </div>
             </div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={tutor.avatar} alt="" className="mx-auto -mt-12 h-24 w-24 rounded-full object-cover shadow-xl ring-4 ring-white" />
+            <img
+              src={tutor.avatar}
+              alt={tutor.name}
+              className="mx-auto mt-6 h-24 w-24 object-cover border border-neutral-300"
+            />
             <div className="px-6 pb-7 pt-3">
-              <div className="text-lg font-bold text-slate-800">AI导师 · {tutor.name}</div>
-              <p className="mt-2 text-sm text-slate-500">“{tutor.greeting || "准备好了吗？我们开始上课吧！"}”</p>
+              <div className="text-lg font-bold text-neutral-800">AI导师 · {tutor.name}</div>
+              <p className="mt-2 text-sm text-neutral-500">“{tutor.greeting || "准备好了吗？我们开始上课吧！"}”</p>
               {!props.llmReady && (
-                <div className="mt-4 rounded-xl bg-amber-50 p-3 text-xs text-amber-700">
+                <div className="mt-4 bg-neutral-100 p-3 text-xs text-neutral-800">
                   尚未配置 AI 模型 API Key，请先
                   <Link href="/settings" className="mx-1 underline">
                     前往设置
@@ -1081,10 +1199,12 @@ export default function Classroom(props: Props) {
                   。
                 </div>
               )}
-              {!props.ttsAvailable && <div className="mt-3 text-xs text-slate-400">未配置 Fish Audio 语音，将以纯文字形式上课。</div>}
+              {!props.ttsAvailable && (
+                <div className="mt-3 text-xs text-neutral-500">未配置 Fish Audio 语音，将以纯文字形式上课。</div>
+              )}
               <button
                 onClick={enter}
-                className="mt-6 inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-sky-500 to-blue-600 px-8 py-3 font-semibold text-white shadow-lg shadow-blue-500/30 transition hover:brightness-110"
+                className="mt-6 inline-flex items-center gap-2 bg-neutral-900 px-8 py-3 font-semibold text-white transition hover:brightness-110"
               >
                 <Play className="h-5 w-5" /> {hasTutorMessages ? "继续上课" : "开始上课"}
               </button>

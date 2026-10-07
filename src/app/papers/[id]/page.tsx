@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { papers, problems, sessions, tutors } from "@/db/schema";
 import { AppHeader } from "@/components/AppHeader";
 import PaperView from "@/components/PaperView";
-import { listTutors, toPaperDTO, visibleProblems } from "@/lib/server/data";
+import { listTutors, paperPageMimes, toPaperDTO, visibleProblems } from "@/lib/server/data";
 import { getSettings, resolveProviderKey } from "@/lib/server/settings";
 
 export const dynamic = "force-dynamic";
@@ -12,8 +12,9 @@ export const dynamic = "force-dynamic";
 export default async function PaperPage({ params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
   if (!Number.isFinite(id)) notFound();
-  const [paper] = await db.select().from(papers).where(eq(papers.id, id));
-  if (!paper) notFound();
+  const [row] = await db.select({ paper: papers, pageMimes: paperPageMimes() }).from(papers).where(eq(papers.id, id));
+  if (!row) notFound();
+  const { paper, pageMimes } = row;
   const probs = await db.select().from(problems).where(eq(problems.paperId, id)).orderBy(asc(problems.idx));
   const tutorList = await listTutors();
   const sess = await db
@@ -35,7 +36,7 @@ export default async function PaperPage({ params }: { params: Promise<{ id: stri
     <div className="min-h-screen">
       <AppHeader />
       <PaperView
-        paper={toPaperDTO(paper)}
+        paper={toPaperDTO(paper, pageMimes)}
         problems={visibleProblems(paper, probs)}
         tutors={tutorList}
         sessions={sess.map((s) => ({ ...s, updatedAt: s.updatedAt.toISOString() }))}

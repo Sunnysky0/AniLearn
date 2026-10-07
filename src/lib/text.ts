@@ -51,9 +51,23 @@ export function hasJapaneseText(text: string): boolean {
   return /[\u3040-\u30ff]/u.test(text.replace(/\$\$[\s\S]*?\$\$|\$[^$\n]*\$/g, ""));
 }
 
+export function speechStyleTag(style = ""): string {
+  const cue = style.trim();
+  if (/^(?:\[[^\[\]\r\n]+\]\s*)+$/u.test(cue) && !/\[\s*\]/u.test(cue)) return cue;
+  const description = cue.replace(/[\[\]\r\n]/g, " ").trim();
+  return `[${description || "calm"}]`;
+}
+
+export function withSpeechStyle(text: string, style = ""): string {
+  const speech = text.trim();
+  const leadingCue = speech.match(/^\[([^\[\]\r\n]+)\]/u);
+  if (!speech || leadingCue?.[1].trim()) return speech;
+  return `${speechStyleTag(style)} ${speech}`;
+}
+
 export function isJapaneseSpeech(text: string): boolean {
-  const plain = text.replace(/\[[^\]]*\]/g, "").trim();
-  return /[\u3040-\u30ff]/u.test(plain) && !/\$|\\[a-zA-Z]|`|\*\*|<\/?\w+|[这们说让为请问吗谢您觉应则]/u.test(plain);
+  const plain = text.replace(/\[[^\[\]\r\n]+\]/gu, (cue) => cue.slice(1, -1).trim() ? "" : cue).trim();
+  return /[\u3040-\u30ff]/u.test(plain) && !/[\[\]]|\$|\\[a-zA-Z]|`|\*\*|<\/?\w+|[这们说让为请问吗谢您觉应则]/u.test(plain);
 }
 
 /** Convert \( \) and \[ \] delimiters into $ / $$ so remark-math can parse them. */

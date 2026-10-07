@@ -1,5 +1,6 @@
 // Browser-only helpers: image downscaling and PDF → image rendering.
-import { MAX_PAPER_PAGES } from "@/lib/types";
+import { MAX_PAPER_PAGES, MAX_PAPER_TEXT_BYTES } from "@/lib/types";
+import { decodePaperText } from "@/lib/paper-source";
 
 export async function fileToJpegDataUrl(file: Blob, maxSide = 2000, quality = 0.86): Promise<string> {
   const url = URL.createObjectURL(file);
@@ -25,6 +26,20 @@ export async function fileToJpegDataUrl(file: Blob, maxSide = 2000, quality = 0.
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+export async function fileToPaperText(file: File): Promise<{ dataUrl: string; mime: string; text: string }> {
+  if (file.size > MAX_PAPER_TEXT_BYTES) throw new Error("文本文件过大，单个文件最多 1.5 MB。");
+  const bytes = await file.arrayBuffer();
+  const text = decodePaperText(new Uint8Array(bytes));
+  const mime = /\.tex$/i.test(file.name) ? "text/x-tex" : "text/markdown";
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("无法读取该文本文件。"));
+    reader.readAsDataURL(new Blob([bytes], { type: mime }));
+  });
+  return { dataUrl, mime, text };
 }
 
 interface PdfViewport {

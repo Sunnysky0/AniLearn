@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "katex/dist/katex.min.css";
+import "@fontsource-variable/noto-sans-sc";
+import "@fontsource-variable/noto-serif-sc";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,14 +14,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-CN">
-      <head>
-        <link rel="preconnect" href="https://cdn.jsdelivr.net" crossOrigin="" />
-        <link
-          rel="stylesheet"
-          href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/style.css"
-        />
-      </head>
-      <body className="bg-[#eef2f8] text-slate-800 antialiased">{children}</body>
+      <body className="bg-paper text-ink antialiased">{children}</body>
     </html>
   );
 }

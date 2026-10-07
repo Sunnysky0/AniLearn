@@ -1,6 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { boards, messages, papers, problems, sessions, tutors } from "@/db/schema";
+import { boards, messages, paperPages, papers, problems, sessions, tutors } from "@/db/schema";
 import {
   DEFAULT_TUTOR_AVATAR,
   DEFAULT_TUTOR_NAME,
@@ -40,7 +40,13 @@ export const toTutorDTO = (r: TutorRow): TutorDTO => ({
   isPreset: r.isPreset,
 });
 
-export const toPaperDTO = (r: PaperRow): PaperDTO => ({
+export const paperPageMimes = () => {
+  // Nest the correlated query so Drizzle retains table names in single-table selections.
+  const source = sql`array(select ${paperPages.mime} from ${paperPages} where ${paperPages.paperId} = ${papers.id} order by ${paperPages.pageIndex})`;
+  return sql<string[]>`${source}`;
+};
+
+export const toPaperDTO = (r: PaperRow, pageMimes?: string[]): PaperDTO => ({
   id: r.id,
   title: r.title,
   subject: r.subject,
@@ -48,6 +54,7 @@ export const toPaperDTO = (r: PaperRow): PaperDTO => ({
   overview: r.overview,
   error: r.error,
   pageCount: r.pageCount,
+  pageMimes,
   createdAt: r.createdAt.toISOString(),
 });
 

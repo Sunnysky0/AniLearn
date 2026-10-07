@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { getSettings, resolveFishKey } from "@/lib/server/settings";
-import { DEFAULT_VOICE_ID } from "@/lib/types";
+import { DEFAULT_VOICE_ID, type TTSRequest } from "@/lib/types";
 import { isJapaneseSpeech } from "@/lib/text";
+import { fishErrorResponse, fishRequest, FishRequestError } from "@/lib/server/fish";
 
 export const dynamic = "force-dynamic";
 
@@ -10,8 +11,8 @@ const globalCache = globalThis as typeof globalThis & { __anilearnTTS?: Map<stri
 const cache = (globalCache.__anilearnTTS ??= new Map<string, ArrayBuffer>());
 
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as { text?: string; voiceId?: string };
-  const text = (body.text ?? "").trim().slice(0, 1500);
+  const body = (await req.json().catch(() => ({}))) as Partial<TTSRequest> | null;
+  const text = (typeof body?.text === "string" ? body.text : "").trim().slice(0, 1500);
   if (!text) return Response.json({ error: "缺少语音文本" }, { status: 400 });
   if (!isJapaneseSpeech(text)) return Response.json({ error: "语音文本必须为日语，不得包含中文、Markdown 或 LaTeX。" }, { status: 400 });
 
@@ -20,32 +21,31 @@ export async function POST(req: Request) {
   if (!key) return Response.json({ error: "尚未配置 Fish Audio API Key" }, { status: 400 });
 
   const model = s.fish.model || "s2.1-pro";
-  const voiceId = (body.voiceId ?? "").trim() || DEFAULT_VOICE_ID;
-  const hash = createHash("sha1").update(`${model}|${voiceId}|${text}`).digest("hex");
-  const hit = cache.get(hash);
+  const voiceId = (typeof body?.voiceId === "string" ? body.voiceId : "").trim() || DEFAULT_VOICE_ID;
+  const hash = createHash("sha1").update(JSON.stringify([key, s.fish.proxyUrl, model, voiceId, text])).digest("hex");
+  const hit = body?.fresh === true ? undefined : cache.get(hash);
   if (hit) {
     return new Response(hit.slice(0), { headers: { "Content-Type": "audio/mpeg", "X-TTS-Cache": "hit" } });
   }
 
   try {
-    const response = await fetch("https://api.fish.audio/v1/tts", {
+    const audio = await fishRequest("/v1/tts", { key, proxyUrl: s.fish.proxyUrl }, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
         model,
       },
       body: JSON.stringify({ text, reference_id: voiceId, format: "mp3" }),
       signal: AbortSignal.any([req.signal, AbortSignal.timeout(12_000)]),
+    }, async (response) => {
+      const contentType = response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase();
+      if (contentType && !contentType.startsWith("audio/") && contentType !== "application/octet-stream")
+        throw new FishRequestError("Fish Audio 返回的内容不是音频，请稍后重试。", "FISH_INVALID_RESPONSE");
+      const audio = await response.arrayBuffer();
+      if (!audio.byteLength)
+        throw new FishRequestError("Fish Audio 返回了空音频，请稍后重试。", "FISH_INVALID_RESPONSE");
+      return audio;
     });
-    if (!response.ok) {
-      const t = await response.text().catch(() => "");
-      return Response.json(
-        { error: `Fish Audio 语音合成失败 (${response.status})：${t.slice(0, 300)}` },
-        { status: 502 },
-      );
-    }
-    const audio = await response.arrayBuffer();
     cache.set(hash, audio);
     if (cache.size > 400) {
       const first = cache.keys().next().value;
@@ -53,8 +53,6 @@ export async function POST(req: Request) {
     }
     return new Response(audio.slice(0), { headers: { "Content-Type": "audio/mpeg" } });
   } catch (e) {
-    const error = e instanceof Error && ["TimeoutError", "AbortError"].includes(e.name)
-      ? "语音请求超时或已取消，将使用文字显示。" : e instanceof Error ? e.message : String(e);
-    return Response.json({ error }, { status: 502 });
+    return fishErrorResponse(e);
   }
 }

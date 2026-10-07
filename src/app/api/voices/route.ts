@@ -1,5 +1,6 @@
 import { getSettings, resolveFishKey } from "@/lib/server/settings";
 import type { VoiceItem } from "@/lib/types";
+import { fishErrorResponse, fishRequest } from "@/lib/server/fish";
 
 export const dynamic = "force-dynamic";
 
@@ -38,15 +39,9 @@ export async function GET(req: Request) {
   if (mine) params.set("self", "true");
 
   try {
-    const r = await fetch(`https://api.fish.audio/model?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${key}` },
-      cache: "no-store",
-    });
-    if (!r.ok) {
-      const t = await r.text().catch(() => "");
-      return Response.json({ error: `Fish Audio 错误 (${r.status})：${t.slice(0, 300)}` }, { status: 502 });
-    }
-    const j = (await r.json()) as { total?: number; items?: FishModel[]; has_more?: boolean };
+    const j = await fishRequest(`/model?${params.toString()}`, { key, proxyUrl: s.fish.proxyUrl }, {
+      signal: AbortSignal.any([req.signal, AbortSignal.timeout(12_000)]),
+    }, async (response) => await response.json() as { total?: number; items?: FishModel[]; has_more?: boolean });
     const items: VoiceItem[] = (j.items ?? []).map((it) => ({
       id: it._id,
       title: it.title ?? "未命名声音",
@@ -60,6 +55,6 @@ export async function GET(req: Request) {
     }));
     return Response.json({ total: j.total ?? items.length, items, hasMore: !!j.has_more });
   } catch (e) {
-    return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
+    return fishErrorResponse(e);
   }
 }

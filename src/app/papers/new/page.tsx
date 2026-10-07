@@ -5,13 +5,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ChevronLeft, ChevronRight, FileUp, Loader2, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
-import { fileToJpegDataUrl, pdfToImages } from "@/lib/client/media";
+import { fileToJpegDataUrl, fileToPaperText, pdfToImages } from "@/lib/client/media";
+import { paperTextFormat } from "@/lib/paper-source";
 import { MAX_PAPER_PAGES, SUBJECTS } from "@/lib/types";
 
 interface PageItem {
   id: string;
   dataUrl: string;
   name: string;
+  mime: string;
+  text?: string;
 }
 
 const MAX_PAGES = MAX_PAPER_PAGES;
@@ -20,6 +23,7 @@ const rid = () => Math.random().toString(36).slice(2, 10);
 export default function NewPaperPage() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
+  const adding = useRef(false);
   const [pages, setPages] = useState<PageItem[]>([]);
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState("数学");
@@ -29,6 +33,8 @@ export default function NewPaperPage() {
   const [dragOver, setDragOver] = useState(false);
 
   async function addFiles(list: FileList | File[]) {
+    if (adding.current || uploading) return;
+    adding.current = true;
     setError(null);
     const files = Array.from(list);
     try {
@@ -37,11 +43,15 @@ export default function NewPaperPage() {
         if (isPdf) {
           setProcessing(`正在读取 PDF：${f.name}`);
           const imgs = await pdfToImages(f, (d, t) => setProcessing(`正在渲染 ${f.name} · 第 ${d}/${t} 页`));
-          setPages((p) => [...p, ...imgs.map((d, i) => ({ id: rid(), dataUrl: d, name: `${f.name} · P${i + 1}` }))]);
+          setPages((p) => [...p, ...imgs.map((d, i) => ({ id: rid(), dataUrl: d, name: `${f.name} · P${i + 1}`, mime: "image/jpeg" }))]);
         } else if (f.type.startsWith("image/")) {
           setProcessing(`正在处理图片：${f.name}`);
           const d = await fileToJpegDataUrl(f, 2000, 0.86);
-          setPages((p) => [...p, { id: rid(), dataUrl: d, name: f.name }]);
+          setPages((p) => [...p, { id: rid(), dataUrl: d, name: f.name, mime: "image/jpeg" }]);
+        } else if (/\.(md|markdown|tex)$/i.test(f.name)) {
+          setProcessing(`正在读取文本：${f.name}`);
+          const source = await fileToPaperText(f);
+          setPages((p) => [...p, { id: rid(), name: f.name, ...source }]);
         } else {
           setError(`不支持的文件类型：${f.name}`);
         }
@@ -50,6 +60,7 @@ export default function NewPaperPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      adding.current = false;
       setProcessing(null);
     }
   }
@@ -101,13 +112,11 @@ export default function NewPaperPage() {
     <div className="min-h-screen">
       <AppHeader />
       <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-        <Link href="/papers" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-blue-600">
+        <Link href="/papers" className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-800">
           <ArrowLeft className="h-4 w-4" /> 返回试卷库
         </Link>
-        <h1 className="mt-2 text-2xl font-bold text-slate-900">上传试卷</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          支持试卷照片（JPG/PNG）和 PDF。AI 导师会逐题解析，标注关键点与教材知识点，然后开始一对一讲解。
-        </p>
+        <h1 className="mt-2 text-[32px] font-bold text-neutral-900">上传试卷</h1>
+        <p className="mt-1 text-sm text-neutral-500">图片 / PDF / .md / .tex · 每份最多 {MAX_PAGES} 页</p>
 
         <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_320px]">
           <div>
@@ -123,20 +132,32 @@ export default function NewPaperPage() {
                 if (e.dataTransfer.files?.length) void addFiles(e.dataTransfer.files);
               }}
               onClick={() => inputRef.current?.click()}
-              className={`flex cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-14 text-center transition ${
-                dragOver ? "border-blue-500 bg-blue-50" : "border-slate-300 bg-white hover:border-blue-400 hover:bg-blue-50/40"
+              role="button"
+              tabIndex={0}
+              aria-label="选择试卷图片、PDF、Markdown 或 LaTeX 试卷"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  inputRef.current?.click();
+                }
+              }}
+              className={`flex cursor-pointer flex-col items-center justify-center  border-2 border-dashed px-6 py-14 text-center transition ${
+                dragOver
+                  ? "border-neutral-900 bg-neutral-100"
+                  : "border-neutral-300 bg-white hover:border-neutral-900 hover:bg-neutral-100/40"
               }`}
             >
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-400 to-blue-600 text-white shadow-lg shadow-blue-500/30">
+              <div className="flex h-16 w-16 items-center justify-center bg-neutral-900 text-white">
                 <UploadCloud className="h-8 w-8" />
               </div>
-              <div className="mt-4 text-lg font-semibold text-slate-800">拖拽文件到这里，或点击选择</div>
-              <div className="mt-1 text-sm text-slate-500">可多选；PDF 会自动拆分为页面（最多 {MAX_PAGES} 页）</div>
+              <div className="mt-4 text-lg font-semibold text-neutral-800">拖拽文件到这里，或点击选择</div>
+              <div className="mt-1 text-sm text-neutral-500">支持图片、PDF、Markdown、LaTeX；文本文件按一页处理</div>
               <input
                 ref={inputRef}
                 type="file"
-                accept="image/*,application/pdf,.pdf"
+                accept="image/*,application/pdf,.pdf,.md,.markdown,.tex,text/markdown,text/x-tex,application/x-tex"
                 multiple
+                disabled={!!processing || !!uploading}
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files?.length) void addFiles(e.target.files);
@@ -146,7 +167,7 @@ export default function NewPaperPage() {
             </div>
 
             {processing && (
-              <div className="mt-4 flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-3 text-sm text-blue-700">
+              <div className="mt-4 flex items-center gap-2 bg-neutral-100 px-4 py-3 text-sm text-neutral-800">
                 <Loader2 className="h-4 w-4 animate-spin" /> {processing}
               </div>
             )}
@@ -154,31 +175,50 @@ export default function NewPaperPage() {
             {pages.length > 0 && (
               <div className="mt-6">
                 <div className="mb-3 flex items-center justify-between text-sm">
-                  <span className="font-semibold text-slate-700">已添加 {pages.length} 页</span>
-                  <button onClick={() => setPages([])} className="text-slate-400 hover:text-rose-500">
+                  <span className="font-semibold text-neutral-700">已添加 {pages.length} 页</span>
+                  <button onClick={() => setPages([])} disabled={!!uploading} className="text-neutral-500 hover:text-neutral-800 disabled:opacity-30">
                     清空
                   </button>
                 </div>
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
                   {pages.map((p, i) => (
-                    <div key={p.id} className="group relative overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={p.dataUrl} alt={p.name} className="aspect-[3/4] w-full object-cover object-top" />
-                      <span className="absolute left-2 top-2 rounded-full bg-blue-600 px-2 py-0.5 text-xs font-bold text-white">
+                    <div key={p.id} className="group relative overflow-hidden bg-white border border-neutral-200">
+                      {p.mime.startsWith("image/") ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={p.dataUrl} alt={p.name} className="aspect-[3/4] w-full object-cover object-top" />
+                      ) : (
+                        <div className="aspect-[3/4] w-full overflow-hidden bg-neutral-50 p-3 pt-10 text-left text-xs text-neutral-700">
+                          <div className="mb-2 font-semibold text-neutral-900">{paperTextFormat(p.mime)}</div>
+                          <pre className="whitespace-pre-wrap break-words font-mono leading-relaxed">{p.text?.slice(0, 1200)}</pre>
+                        </div>
+                      )}
+                      <span className="absolute left-2 top-2 bg-neutral-900 px-2 py-0.5 text-xs font-bold text-white">
                         {i + 1}
                       </span>
-                      <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/60 to-transparent p-2 opacity-0 transition group-hover:opacity-100">
+                      <div title={p.name} className="truncate border-t border-neutral-200 px-2 py-1.5 text-xs text-neutral-500">{p.name}</div>
+                      <div className="flex items-center justify-between border-t border-neutral-300 bg-white p-2">
                         <div className="flex gap-1">
-                          <button onClick={() => move(i, -1)} className="rounded bg-white/90 p-1 text-slate-700" title="前移">
+                          <button
+                            onClick={() => move(i, -1)}
+                            disabled={i === 0 || !!uploading}
+                            className="p-1 text-neutral-900 disabled:opacity-30"
+                            title="前移"
+                          >
                             <ChevronLeft className="h-4 w-4" />
                           </button>
-                          <button onClick={() => move(i, 1)} className="rounded bg-white/90 p-1 text-slate-700" title="后移">
+                          <button
+                            onClick={() => move(i, 1)}
+                            disabled={i === pages.length - 1 || !!uploading}
+                            className="p-1 text-neutral-900 disabled:opacity-30"
+                            title="后移"
+                          >
                             <ChevronRight className="h-4 w-4" />
                           </button>
                         </div>
                         <button
                           onClick={() => setPages((ps) => ps.filter((x) => x.id !== p.id))}
-                          className="rounded bg-white/90 p-1 text-rose-600"
+                          disabled={!!uploading}
+                          className="bg-white/90 p-1 text-neutral-800"
                           title="删除"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -191,25 +231,31 @@ export default function NewPaperPage() {
             )}
           </div>
 
-          <aside className="h-fit space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200/70 lg:sticky lg:top-24">
+          <aside className="h-fit space-y-5 border-t-2 border-neutral-900 py-6 lg:sticky lg:top-24">
             <div>
-              <label className="text-sm font-semibold text-slate-700">试卷名称</label>
+              <label htmlFor="paper-title" className="text-sm font-semibold text-neutral-700">
+                试卷名称
+              </label>
               <input
+                id="paper-title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="如：2024 新高考 I 卷 数学（可留空，AI 自动识别）"
-                className="mt-2 w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
+                className="mt-2 w-full border border-neutral-200 px-3.5 py-2.5 text-sm outline-none"
               />
             </div>
             <div>
-              <label className="text-sm font-semibold text-slate-700">学科</label>
+              <label className="text-sm font-semibold text-neutral-700">学科</label>
               <div className="mt-2 grid grid-cols-3 gap-2">
                 {SUBJECTS.map((s) => (
                   <button
                     key={s}
                     onClick={() => setSubject(s)}
-                    className={`rounded-lg py-2 text-sm transition ${
-                      subject === s ? "bg-blue-600 font-semibold text-white shadow" : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                    aria-pressed={subject === s}
+                    className={` py-2 text-sm transition ${
+                      subject === s
+                        ? "bg-neutral-900 font-semibold text-white "
+                        : "bg-neutral-50 text-neutral-600 hover:bg-neutral-100"
                     }`}
                   >
                     {s}
@@ -218,15 +264,15 @@ export default function NewPaperPage() {
               </div>
             </div>
             {tooMany && (
-              <div className="rounded-xl bg-amber-50 p-3 text-xs text-amber-700">
+              <div className="bg-neutral-100 p-3 text-xs text-neutral-800">
                 页数较多（{pages.length} 页），建议拆分为多份试卷上传，单份不超过 {MAX_PAGES} 页解析效果最佳。
               </div>
             )}
-            {error && <div className="rounded-xl bg-rose-50 p-3 text-sm text-rose-600">{error}</div>}
+            {error && <div className="bg-neutral-100 p-3 text-sm text-neutral-800">{error}</div>}
             <button
               onClick={submit}
               disabled={!pages.length || !!uploading || !!processing || tooMany}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 py-3 font-semibold text-white shadow-lg shadow-blue-500/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex w-full items-center justify-center gap-2 bg-neutral-900 py-3 font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {uploading ? (
                 <>
@@ -238,7 +284,7 @@ export default function NewPaperPage() {
                 </>
               )}
             </button>
-            <div className="space-y-1.5 text-xs leading-relaxed text-slate-400">
+            <div className="space-y-1.5 text-xs leading-relaxed text-neutral-500">
               <p className="flex gap-1.5">
                 <FileUp className="h-3.5 w-3.5 shrink-0" /> 拍照时尽量保持试卷平整、光线均匀，文字清晰。
               </p>

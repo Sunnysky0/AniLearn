@@ -1,13 +1,14 @@
-import { hasJapaneseText, isJapaneseSpeech, splitShortMessages } from "@/lib/text";
+import { hasJapaneseText, isJapaneseSpeech, splitShortMessages, withSpeechStyle } from "@/lib/text";
 import { COVERAGE_TOPICS, type CoverageTopic, type TeachingCoverage } from "@/lib/types";
 import { complete, type LLMConfig } from "./llm";
 import { createTagParser, innerTag } from "./protocol";
+import { tutorSpeechRules } from "./prompts";
 
-export async function prepareTutorMessages(cfg: LLMConfig, zh: string, ja: string, signal: AbortSignal) {
+export async function prepareTutorMessages(cfg: LLMConfig, zh: string, ja: string, signal: AbortSignal, voiceStyle = "") {
   const chunks = splitShortMessages(zh);
   if (!chunks.length) throw new Error("模型没有返回有效消息，请重试。");
   if (chunks.length === 1 && !hasJapaneseText(zh) && isJapaneseSpeech(ja)) {
-    return [{ zh: zh.trim(), ja: ja.trim() }];
+    return [{ zh: zh.trim(), ja: withSpeechStyle(ja, voiceStyle) }];
   }
   const fallback = () => chunks.map((chunk) => ({ zh: chunk, ja: "" }));
   let raw: string;
@@ -17,8 +18,10 @@ export async function prepareTutorMessages(cfg: LLMConfig, zh: string, ja: strin
 将用户提供的内容整理为多条简体中文短消息，每条不超过 80 字，保持公式、答案与教学含义。
 若用户提供的消息已经是中文短句，必须逐字保留每条中文。
 每条消息配一段自然日语语音，不含中文、Markdown 或 LaTeX；数学公式改为日语读法。
+原语音台本只作语音风格参考；保留其中有效且符合语境的情绪、强调和停顿标签，分拆后每条语音仍须有句首标签。原标签无效时按中文含义重新选择。
+${tutorSpeechRules(voiceStyle)}
 只输出 <msg><zh>中文短消息</zh><ja>日语语音</ja></msg>，不得输出 action、board 或 covered。`,
-    messages: [{ role: "user", content: chunks.map((chunk) => `<zh>${chunk}</zh>`).join("\n") }],
+    messages: [{ role: "user", content: chunks.map((chunk) => `<zh>${chunk}</zh>`).join("\n") + `\n<original_speech>${ja}</original_speech>` }],
     maxTokens: 8192, signal,
   });
   } catch (e) {
@@ -37,7 +40,7 @@ export async function prepareTutorMessages(cfg: LLMConfig, zh: string, ja: strin
   if (!hasJapaneseText(zh) && repaired.map((m) => m.zh).join("") !== chunks.join("")) {
     return fallback();
   }
-  return repaired;
+  return repaired.map((m) => ({ ...m, ja: withSpeechStyle(m.ja, voiceStyle) }));
 }
 
 export function acceptCoverage(coverage: TeachingCoverage, topic: string, quote: string, taught: string[]) {

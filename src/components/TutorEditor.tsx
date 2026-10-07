@@ -1,11 +1,18 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { Children, cloneElement, isValidElement, useId, useRef, useState, type ReactElement } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, Loader2, Mic, Play, Save, Search, Square, Trash2, Upload, UserRound } from "lucide-react";
 import { fileToJpegDataUrl } from "@/lib/client/media";
-import { DEFAULT_TUTOR_AVATAR, DEFAULT_VOICE_ID, SUBJECTS, type TutorDTO, type TutorInput, type VoiceItem } from "@/lib/types";
+import {
+  DEFAULT_TUTOR_AVATAR,
+  DEFAULT_VOICE_ID,
+  SUBJECTS,
+  type TutorDTO,
+  type TutorInput,
+  type VoiceItem,
+} from "@/lib/types";
 
 const AVATARS = [DEFAULT_TUTOR_AVATAR, "/avatars/rin.png", "/avatars/haruto.png", "/avatars/sakura.png"];
 
@@ -19,10 +26,19 @@ const PERSONALITY_PRESETS = [
 ];
 
 const STYLE_PRESETS = [
-  { label: "苏格拉底启发", text: "苏格拉底式启发教学：先提问引导学生思考，再逐步揭示解题思路；每讲完一个关键步骤都确认学生是否理解。" },
-  { label: "结构化精讲", text: "结构化精讲：先建立解题框架与模型，再规范推导；强调解题模板与规范书写，总结同类题型的通法。" },
+  {
+    label: "苏格拉底启发",
+    text: "苏格拉底式启发教学：先提问引导学生思考，再逐步揭示解题思路；每讲完一个关键步骤都确认学生是否理解。",
+  },
+  {
+    label: "结构化精讲",
+    text: "结构化精讲：先建立解题框架与模型，再规范推导；强调解题模板与规范书写，总结同类题型的通法。",
+  },
   { label: "情境联想", text: "情境联想教学：把抽象知识与生活现象联系起来，用口诀和记忆技巧帮助记忆，讲题节奏明快。" },
-  { label: "实战提分", text: "实战提分导向：聚焦高考得分点与答题规范，讲完一道题立刻总结秒杀技巧和同类变式，强调考场策略。" },
+  {
+    label: "实战提分",
+    text: "实战提分导向：聚焦高考得分点与答题规范，讲完一道题立刻总结秒杀技巧和同类变式，强调考场策略。",
+  },
   { label: "错因诊断", text: "错因诊断式：先让学生暴露思路，精准定位知识漏洞和思维误区，再对症下药、查漏补缺。" },
 ];
 
@@ -51,17 +67,30 @@ const EMPTY: TutorInput = {
 };
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  const id = useId();
+  const controls = Children.map(children, (child) => {
+    if (!isValidElement(child) || !["input", "textarea", "select"].includes(String(child.type))) return child;
+    return cloneElement(child as ReactElement<{ id?: string; "aria-describedby"?: string }>, {
+      id,
+      "aria-describedby": hint ? `${id}-hint` : undefined,
+    });
+  });
   return (
     <div>
-      <label className="text-sm font-semibold text-slate-700">{label}</label>
-      {hint && <p className="mt-0.5 text-xs text-slate-400">{hint}</p>}
-      <div className="mt-2">{children}</div>
+      <label htmlFor={id} className="text-sm font-semibold text-neutral-700">
+        {label}
+      </label>
+      {hint && (
+        <p id={`${id}-hint`} className="mt-0.5 text-xs text-neutral-500">
+          {hint}
+        </p>
+      )}
+      <div className="mt-2">{controls}</div>
     </div>
   );
 }
 
-const inputCls =
-  "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100";
+const inputCls = "w-full  border border-neutral-200 bg-white px-3.5 py-2.5 text-sm outline-none transition   ";
 
 export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO | null; ttsReady: boolean }) {
   const router = useRouter();
@@ -188,18 +217,25 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      <Link href="/tutors" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-blue-600">
+      <Link href="/tutors" className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-800">
         <ArrowLeft className="h-4 w-4" /> 我的导师
       </Link>
-      <h1 className="mt-2 text-2xl font-bold text-slate-900">{initial ? `编辑导师 · ${initial.name}` : "创建新导师"}</h1>
+      <h1 className="mt-2 text-[32px] font-bold text-neutral-900">
+        {initial ? `编辑导师 · ${initial.name}` : "创建新导师"}
+      </h1>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_360px]">
         <div className="space-y-6">
-          <section className="space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200/70">
-            <h2 className="font-bold text-slate-800">基本信息</h2>
+          <section className="space-y-5 border-t-2 border-neutral-900 py-6">
+            <h2 className="font-bold text-neutral-800">基本信息</h2>
             <div className="grid gap-5 sm:grid-cols-2">
               <Field label="导师名字">
-                <input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="如：艾琳" className={inputCls} />
+                <input
+                  value={form.name}
+                  onChange={(e) => set("name", e.target.value)}
+                  placeholder="如：艾琳"
+                  className={inputCls}
+                />
               </Field>
               <Field label="任教学科">
                 <select value={form.subject} onChange={(e) => set("subject", e.target.value)} className={inputCls}>
@@ -209,27 +245,39 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
                 </select>
               </Field>
               <Field label="标签" hint="用顿号或逗号分隔，最多 6 个">
-                <input value={tagsText} onChange={(e) => setTagsText(e.target.value)} placeholder="数学、逻辑、你的学习伙伴" className={inputCls} />
+                <input
+                  value={tagsText}
+                  onChange={(e) => setTagsText(e.target.value)}
+                  placeholder="数学、逻辑、你的学习伙伴"
+                  className={inputCls}
+                />
               </Field>
               <Field label="一句话简介">
-                <input value={form.tagline} onChange={(e) => set("tagline", e.target.value)} placeholder="温柔耐心的数学导师" className={inputCls} />
+                <input
+                  value={form.tagline}
+                  onChange={(e) => set("tagline", e.target.value)}
+                  placeholder="温柔耐心的数学导师"
+                  className={inputCls}
+                />
               </Field>
             </div>
           </section>
 
-          <section className="space-y-4 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200/70">
-            <h2 className="font-bold text-slate-800">形象</h2>
+          <section className="space-y-4 border-t-2 border-neutral-900 py-6">
+            <h2 className="font-bold text-neutral-800">形象</h2>
             <div className="flex flex-wrap items-center gap-4">
               {AVATARS.map((a) => (
                 <button
                   key={a}
                   onClick={() => set("avatar", a)}
-                  className={`relative rounded-full ring-4 transition ${form.avatar === a ? "ring-blue-500" : "ring-transparent hover:ring-slate-200"}`}
+                  className={`relative border-2 transition ${form.avatar === a ? "border-neutral-900" : "border-transparent hover:border-neutral-900"}`}
+                  title={`选择导师形象 ${AVATARS.indexOf(a) + 1}`}
+                  aria-pressed={form.avatar === a}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={a} alt="" className="h-20 w-20 rounded-full object-cover" />
+                  <img src={a} alt="" className="h-20 w-20 object-cover" />
                   {form.avatar === a && (
-                    <span className="absolute -right-1 -top-1 rounded-full bg-blue-600 p-1 text-white">
+                    <span className="absolute -right-1 -top-1 bg-neutral-900 p-1 text-white">
                       <Check className="h-3 w-3" />
                     </span>
                   )}
@@ -237,66 +285,99 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
               ))}
               <button
                 onClick={() => fileRef.current?.click()}
-                className="flex h-20 w-20 flex-col items-center justify-center rounded-full border-2 border-dashed border-slate-300 text-xs text-slate-500 hover:border-blue-400 hover:text-blue-600"
+                className="flex h-20 w-20 flex-col items-center justify-center border-2 border-dashed border-neutral-300 text-xs text-neutral-500 hover:border-neutral-900 hover:text-neutral-800"
               >
                 <Upload className="h-5 w-5" />
                 上传
               </button>
               <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onAvatarFile} />
               {form.avatar.startsWith("data:") && (
-                <div className="flex items-center gap-2 text-xs text-slate-500">
+                <div className="flex items-center gap-2 text-xs text-neutral-500">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={form.avatar} alt="" className="h-20 w-20 rounded-full object-cover ring-4 ring-blue-500" />
+                  <img src={form.avatar} alt="" className="h-20 w-20 object-cover border-2 border-neutral-900" />
                   自定义形象
                 </div>
               )}
             </div>
           </section>
 
-          <section className="space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200/70">
-            <h2 className="font-bold text-slate-800">性格与教学</h2>
+          <section className="space-y-5 border-t-2 border-neutral-900 py-6">
+            <h2 className="font-bold text-neutral-800">性格与教学</h2>
             <Field label="性格" hint="决定导师和你交流时的态度与情绪">
               <div className="mb-2 flex flex-wrap gap-2">
                 {PERSONALITY_PRESETS.map((p) => (
-                  <button key={p.label} onClick={() => set("personality", p.text)} className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600 hover:bg-blue-50 hover:text-blue-600">
+                  <button
+                    key={p.label}
+                    onClick={() => set("personality", p.text)}
+                    className="bg-neutral-100 px-3 py-1 text-xs text-neutral-600 hover:bg-neutral-100 hover:text-neutral-800"
+                  >
                     {p.label}
                   </button>
                 ))}
               </div>
-              <textarea value={form.personality} onChange={(e) => set("personality", e.target.value)} rows={3} className={inputCls} />
+              <textarea
+                value={form.personality}
+                onChange={(e) => set("personality", e.target.value)}
+                rows={3}
+                className={inputCls}
+              />
             </Field>
             <Field label="教学风格" hint="决定导师如何讲题、如何引导你思考">
               <div className="mb-2 flex flex-wrap gap-2">
                 {STYLE_PRESETS.map((p) => (
-                  <button key={p.label} onClick={() => set("teachingStyle", p.text)} className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600 hover:bg-blue-50 hover:text-blue-600">
+                  <button
+                    key={p.label}
+                    onClick={() => set("teachingStyle", p.text)}
+                    className="bg-neutral-100 px-3 py-1 text-xs text-neutral-600 hover:bg-neutral-100 hover:text-neutral-800"
+                  >
                     {p.label}
                   </button>
                 ))}
               </div>
-              <textarea value={form.teachingStyle} onChange={(e) => set("teachingStyle", e.target.value)} rows={3} className={inputCls} />
+              <textarea
+                value={form.teachingStyle}
+                onChange={(e) => set("teachingStyle", e.target.value)}
+                rows={3}
+                className={inputCls}
+              />
             </Field>
             <Field label="说话风格 / 口头禅">
-              <input value={form.speakingStyle} onChange={(e) => set("speakingStyle", e.target.value)} placeholder="如：常说“我们一起来看看”" className={inputCls} />
+              <input
+                value={form.speakingStyle}
+                onChange={(e) => set("speakingStyle", e.target.value)}
+                placeholder="如：常说“我们一起来看看”"
+                className={inputCls}
+              />
             </Field>
             <Field label="开场白">
-              <input value={form.greeting} onChange={(e) => set("greeting", e.target.value)} placeholder="你好呀，今天我们一起把这张卷子吃透吧！" className={inputCls} />
+              <input
+                value={form.greeting}
+                onChange={(e) => set("greeting", e.target.value)}
+                placeholder="你好呀，今天我们一起把这张卷子吃透吧！"
+                className={inputCls}
+              />
             </Field>
           </section>
 
-          <section className="space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200/70">
+          <section className="space-y-5 border-t-2 border-neutral-900 py-6">
             <div className="flex items-center justify-between">
-              <h2 className="flex items-center gap-2 font-bold text-slate-800">
-                <Mic className="h-5 w-5 text-blue-600" /> 声音（Fish Audio · 日语播报）
+              <h2 className="flex items-center gap-2 font-bold text-neutral-800">
+                <Mic className="h-5 w-5 text-neutral-800" /> 声音（Fish Audio · 日语播报）
               </h2>
               {!ttsReady && (
-                <Link href="/settings" className="text-xs text-amber-600 hover:underline">
+                <Link href="/settings" className="text-xs text-neutral-800 hover:underline">
                   未配置 Fish Audio API Key →
                 </Link>
               )}
             </div>
             <div className="grid gap-5 sm:grid-cols-2">
               <Field label="声音 ID（reference_id）">
-                <input value={form.voiceId} onChange={(e) => set("voiceId", e.target.value)} placeholder={DEFAULT_VOICE_ID} className={`${inputCls} font-mono text-xs`} />
+                <input
+                  value={form.voiceId}
+                  onChange={(e) => set("voiceId", e.target.value)}
+                  placeholder={DEFAULT_VOICE_ID}
+                  className={`${inputCls} font-mono text-xs`}
+                />
               </Field>
               <Field label="声音名称">
                 <input value={form.voiceName} onChange={(e) => set("voiceName", e.target.value)} className={inputCls} />
@@ -308,7 +389,7 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
                   <button
                     key={t}
                     onClick={() => set("voiceStyle", t)}
-                    className={`rounded-full px-3 py-1 text-xs ${form.voiceStyle === t ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50"}`}
+                    className={` px-3 py-1 text-xs ${form.voiceStyle === t ? "bg-neutral-900 text-white" : "bg-neutral-100 text-neutral-600 hover:bg-neutral-100"}`}
                   >
                     {t}
                   </button>
@@ -319,13 +400,13 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
             <button
               onClick={() => void preview(form.voiceId || DEFAULT_VOICE_ID, "current")}
               disabled={!ttsReady}
-              className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+              className="inline-flex items-center gap-2 bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
             >
               {playing === "current" ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />} 试听当前声音
             </button>
 
-            <div className="rounded-2xl bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-700">从 Fish Audio 声音库挑选</div>
+            <div className="bg-neutral-50 p-4">
+              <div className="text-sm font-semibold text-neutral-700">从 Fish Audio 声音库挑选</div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <input
                   value={query}
@@ -343,46 +424,50 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
                 <button
                   onClick={() => void searchVoices()}
                   disabled={!ttsReady || voiceLoading}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-800 px-4 text-sm text-white disabled:opacity-40"
+                  className="inline-flex items-center gap-1.5 bg-neutral-800 px-4 text-sm text-white disabled:opacity-40"
                 >
                   {voiceLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} 搜索
                 </button>
                 <button
                   onClick={() => void searchVoices(true)}
                   disabled={!ttsReady || voiceLoading}
-                  className="rounded-xl bg-white px-3 text-sm text-slate-600 ring-1 ring-slate-200 disabled:opacity-40"
+                  className="bg-white px-3 text-sm text-neutral-600 border border-neutral-200 disabled:opacity-40"
                 >
                   我的声音
                 </button>
               </div>
-              {voiceError && <div className="mt-3 text-xs text-rose-600">{voiceError}</div>}
+              {voiceError && <div className="mt-3 text-xs text-neutral-800">{voiceError}</div>}
               {voices.length > 0 && (
                 <div className="mt-4 grid max-h-96 gap-2 overflow-y-auto thin-scroll sm:grid-cols-2">
                   {voices.map((v) => (
                     <div
                       key={v.id}
-                      className={`flex items-center gap-3 rounded-xl bg-white p-2.5 ring-1 ${form.voiceId === v.id ? "ring-blue-500" : "ring-slate-200"}`}
+                      className={`flex items-center gap-3  bg-white p-2.5 border ${form.voiceId === v.id ? "border-neutral-900" : "border-neutral-200"}`}
                     >
                       {v.cover ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={v.cover} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" />
+                        <img src={v.cover} alt="" className="h-11 w-11 shrink-0 object-cover" />
                       ) : (
-                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-400">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center bg-neutral-100 text-neutral-500">
                           <UserRound className="h-5 w-5" />
                         </div>
                       )}
                       <div className="min-w-0 flex-1">
-                        <div className="line-clamp-1 text-sm font-medium text-slate-800">{v.title}</div>
-                        <div className="line-clamp-1 text-[11px] text-slate-400">
+                        <div className="line-clamp-1 text-sm font-medium text-neutral-800">{v.title}</div>
+                        <div className="line-clamp-1 text-[11px] text-neutral-500">
                           {v.author} · {v.uses.toLocaleString()} 次使用 · {v.languages.join("/")}
                         </div>
                       </div>
-                      <button onClick={() => void preview(v.id, v.id, v.sample)} className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100" title="试听">
+                      <button
+                        onClick={() => void preview(v.id, v.id, v.sample)}
+                        className="p-1.5 text-neutral-500 hover:bg-neutral-100"
+                        title="试听"
+                      >
                         {playing === v.id ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                       </button>
                       <button
                         onClick={() => setForm((f) => ({ ...f, voiceId: v.id, voiceName: v.title }))}
-                        className="rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-100"
+                        className="bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-800 hover:bg-neutral-100"
                       >
                         使用
                       </button>
@@ -395,54 +480,57 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
         </div>
 
         <aside className="h-fit space-y-4 lg:sticky lg:top-24">
-          <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200/70">
-            <div className="bg-gradient-to-r from-[#13254d] to-[#2563eb] px-5 py-3 text-xs tracking-widest text-blue-100">实时预览</div>
-            <div className="space-y-4 bg-[#f4f7fc] p-5">
+          <div className="overflow-hidden bg-white border border-neutral-200/70">
+            <div className="bg-neutral-900 px-5 py-3 text-xs text-neutral-200">实时预览</div>
+            <div className="space-y-4 bg-[#fafafa] p-5">
               <div className="flex items-center gap-4">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={form.avatar} alt="" className="h-20 w-20 rounded-full object-cover ring-4 ring-blue-100" />
+                <img src={form.avatar} alt="" className="h-20 w-20 object-cover border-2 border-neutral-100" />
                 <div>
-                  <div className="flex items-center gap-2 text-lg font-bold text-slate-800">
-                    AI导师 · {form.name || "未命名"} <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                  <div className="flex items-center gap-2 text-lg font-bold text-neutral-800">
+                    {form.name || "未命名"}
                   </div>
-                  <div className="text-sm text-slate-500">{tags.join(" | ") || form.subject}</div>
+                  <div className="text-sm text-neutral-500">{tags.join(" | ") || form.subject}</div>
                 </div>
               </div>
               <div className="flex gap-2.5">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={form.avatar} alt="" className="h-9 w-9 rounded-full object-cover" />
-                <div className="rounded-2xl rounded-tl-md bg-white px-4 py-2.5 text-sm text-slate-700 shadow-sm">
+                <img src={form.avatar} alt="" className="h-9 w-9 object-cover" />
+                <div className="border border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-700">
                   {form.greeting || "你好！今天我们一起把这张卷子吃透吧～"}
                 </div>
               </div>
               <div className="flex justify-end">
-                <div className="rounded-2xl rounded-tr-md bg-gradient-to-r from-[#5b9bff] to-[#3d7ef5] px-4 py-2.5 text-sm text-white shadow-sm">
+                <div className="border border-neutral-300 bg-neutral-100 px-4 py-2.5 text-sm text-neutral-900">
                   好的老师，我准备好了！
                 </div>
               </div>
-              <div className="rounded-xl bg-white/70 p-3 text-xs leading-relaxed text-slate-500">
+              <div className="bg-white/70 p-3 text-xs leading-relaxed text-neutral-500">
                 <div>
-                  <b className="text-slate-600">性格</b>：{form.personality || "—"}
+                  <b className="text-neutral-600">性格</b>：{form.personality || "—"}
                 </div>
                 <div className="mt-1">
-                  <b className="text-slate-600">风格</b>：{form.teachingStyle || "—"}
+                  <b className="text-neutral-600">风格</b>：{form.teachingStyle || "—"}
                 </div>
                 <div className="mt-1">
-                  <b className="text-slate-600">语气</b>：{form.voiceStyle || "—"}
+                  <b className="text-neutral-600">语气</b>：{form.voiceStyle || "—"}
                 </div>
               </div>
             </div>
           </div>
-          {error && <div className="rounded-xl bg-rose-50 p-3 text-sm text-rose-600">{error}</div>}
+          {error && <div className="bg-neutral-100 p-3 text-sm text-neutral-800">{error}</div>}
           <button
             onClick={save}
             disabled={saving || !form.name.trim()}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 py-3 font-semibold text-white shadow-lg shadow-blue-500/30 hover:brightness-110 disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 bg-neutral-900 py-3 font-semibold text-white hover:brightness-110 disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : <Save className="h-5 w-5" />} 保存导师
           </button>
           {initial && (
-            <button onClick={remove} className="flex w-full items-center justify-center gap-2 rounded-2xl py-2.5 text-sm text-slate-400 hover:bg-rose-50 hover:text-rose-600">
+            <button
+              onClick={remove}
+              className="flex w-full items-center justify-center gap-2 py-2.5 text-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
+            >
               <Trash2 className="h-4 w-4" /> 删除导师
             </button>
           )}

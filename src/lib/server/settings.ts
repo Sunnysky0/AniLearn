@@ -9,6 +9,7 @@ import {
   type SettingsData,
 } from "@/lib/types";
 import type { LLMConfig } from "./llm";
+import { fishProxyPreview } from "./fish";
 
 export const FISH_ENV = ["FISH_API_KEY", "FISH_AUDIO_API_KEY"];
 
@@ -38,7 +39,7 @@ export function defaultSettings(): SettingsData {
   return {
     provider: withEnv?.id ?? "openai",
     providers,
-    fish: { apiKey: "", model: "s2.1-pro", enabled: true },
+    fish: { apiKey: "", model: "s2.1-pro", enabled: true, proxyUrl: "" },
     autoContinue: true,
   };
 }
@@ -115,6 +116,8 @@ export function toPublicSettings(s: SettingsData): PublicSettings {
     fish: {
       model: s.fish.model,
       enabled: s.fish.enabled,
+      hasProxy: !!s.fish.proxyUrl,
+      proxyPreview: fishProxyPreview(s.fish.proxyUrl),
       hasKey: !!fish.key,
       keySource: fish.source,
       keyPreview: mask(fish.key),

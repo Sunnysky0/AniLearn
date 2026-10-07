@@ -1,10 +1,10 @@
 async (page) => {
   const results = [];
   await page.goto('http://127.0.0.1:3107/settings');
-  await page.getByRole('button', { name: /Anthropic/ }).click();
-  await page.getByRole('button', { name: /Grok/ }).click();
-  await page.getByRole('button', { name: /Gemini/ }).click();
-  await page.getByRole('button', { name: /OpenAI/ }).click();
+  await page.getByRole('radio', { name: 'Anthropic' }).check();
+  await page.getByRole('radio', { name: 'Grok' }).check();
+  await page.getByRole('radio', { name: 'Gemini' }).check();
+  await page.getByRole('radio', { name: 'OpenAI' }).check();
   results.push({ test: 'settings four provider tabs', outcome: 'pass', fullDummyKeyVisible: (await page.locator('body').innerText()).includes('audit-dummy-key-only') });
   await page.screenshot({ path: 'output/playwright/fix-settings.png', fullPage: true });
   const draft = { name: '审计测试导师', subject: '物理', avatar: '/avatars/rin.png', personality: '耐心严谨', teachingStyle: '先做后讲', speakingStyle: '简短直接', voiceId: 'audit-voice', voiceName: '测试声线', voiceStyle: '[落ち着いた口調]', greeting: '你好，我们来学习。', tags: ['物理'], tagline: '测试导师定制' };

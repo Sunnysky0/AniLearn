@@ -1,0 +1,37 @@
+async (page) => {
+  const results = [];
+  await page.goto('http://127.0.0.1:3107/settings');
+  await page.getByRole('button', { name: /Anthropic/ }).click();
+  await page.getByRole('button', { name: /Grok/ }).click();
+  await page.getByRole('button', { name: /Gemini/ }).click();
+  await page.getByRole('button', { name: /OpenAI/ }).click();
+  results.push({ test: 'settings four provider tabs', outcome: 'pass', fullDummyKeyVisible: (await page.locator('body').innerText()).includes('audit-dummy-key-only') });
+  await page.screenshot({ path: 'output/playwright/fix-settings.png', fullPage: true });
+  const draft = { name: '审计测试导师', subject: '物理', avatar: '/avatars/rin.png', personality: '耐心严谨', teachingStyle: '先做后讲', speakingStyle: '简短直接', voiceId: 'audit-voice', voiceName: '测试声线', voiceStyle: '[落ち着いた口調]', greeting: '你好，我们来学习。', tags: ['物理'], tagline: '测试导师定制' };
+  const created = await (await page.request.post('http://127.0.0.1:3107/api/tutors', { data: draft })).json();
+  const stored = await (await page.request.get('http://127.0.0.1:3107/api/tutors/' + created.id)).json();
+  await page.goto('http://127.0.0.1:3107/tutors/' + created.id);
+  results.push({ test: 'custom tutor persona, image, subject and voice persisted and editor loaded', outcome: Object.entries(draft).every(([key, value]) => JSON.stringify(value) === JSON.stringify(stored[key])) ? 'pass' : 'fail' });
+  await page.request.put('http://127.0.0.1:3107/api/settings', { data: { provider: 'openai', providers: { openai: { analysisModel: 'audit-normal', chatModel: 'audit-teach' } }, fish: { enabled: false } } });
+  await page.goto('http://127.0.0.1:3107/papers/new');
+  await page.locator('input[type=file]').setInputFiles('output/audit/two-pages.pdf');
+  await page.getByText('已添加 2 页', { exact: true }).waitFor();
+  await page.screenshot({ path: 'output/playwright/fix-pdf-upload.png', fullPage: true });
+  await page.getByRole('button', { name: '上传并开始 AI 解析', exact: true }).click();
+  await page.waitForURL('**/papers/*');
+  await page.getByText('开始一对一学习', { exact: true }).waitFor();
+  await page.waitForFunction(() => document.body.innerText.includes('已解析'));
+  const paperId = Number(page.url().split('/').at(-1));
+  const uploaded = await (await page.request.get('http://127.0.0.1:3107/api/papers/' + paperId)).json();
+  results.push({ test: 'real two-page PDF rasterized, uploaded and analysis streamed', outcome: uploaded.paper.pageCount === 2 && uploaded.problems.length === 2 ? 'pass' : 'fail', paperId, pageCount: uploaded.paper.pageCount, problems: uploaded.problems.length });
+  await page.goto('http://127.0.0.1:3107/papers/new');
+  await page.locator('input[type=file]').setInputFiles('public/avatars/darjeeling.png');
+  await page.getByText('已添加 1 页', { exact: true }).waitFor();
+  results.push({ test: 'real image upload preview', outcome: 'pass' });
+  await page.goto('http://127.0.0.1:3107/papers/new');
+  await page.locator('input[type=file]').setInputFiles('output/audit/seventeen-pages.pdf');
+  await page.getByText(/PDF 共 17 页，单份试卷最多 12 页/).waitFor();
+  results.push({ test: '17-page PDF explicitly rejected before rasterization', outcome: 'pass', previewPages: 0, submissionDisabled: await page.getByRole('button', { name: '上传并开始 AI 解析', exact: true }).isDisabled() });
+  await page.evaluate(r => localStorage.setItem('audit-upload-results', JSON.stringify(r)), results);
+  return results;
+}

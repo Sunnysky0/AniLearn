@@ -1,0 +1,211 @@
+<!-- BEGIN:nextjs-agent-rules -->
+
+# Next.js: ALWAYS read docs before coding
+
+Before any Next.js work, find and read the relevant doc in `node_modules/next/dist/docs/`. Your training data is outdated — the docs are the source of truth.
+
+<!-- END:nextjs-agent-rules -->
+
+# AniLearn
+
+GaoKao-oriented AI one-to-one tutor platform. A student uploads exam papers; the tutor analyzes every problem, then teaches through a streaming classroom: chat on the left, blackboard on the right, Japanese TTS in sync with Chinese text.
+
+Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). Created by Claude Opus 5.5.
+
+## Product charter
+
+- **EPDL (Exam Paper Driven Learning).** The exam paper is the syllabus. Upload images or PDF → AI extracts every problem, writes solutions, marks key points, and maps each item to textbook knowledge. Classroom instruction then walks the paper problem by problem.
+- **Custom tutors.** Personality, teaching style, speaking style, subject, avatar, greeting, and Fish Audio voice (`voiceId` + Japanese `voiceStyle` tag).
+- **Models.** OpenAI / Anthropic / Grok (xAI) / Gemini, via API. No vendor SDKs — raw `fetch` + SSE in `src/lib/server/llm.ts`.
+- **Voice.** Fish Audio TTS (`s2.1-pro`). Chat and board are Chinese; spoken audio is Japanese. Text in the chat bubble reveals in sync with playback.
+- **Short messages.** The tutor sends 2–6 short bubbles per turn (1–3 sentences each), never one long paragraph.
+- **Default language.** UI, prompts, chat, and board: Simplified Chinese (`zh-CN`). TTS speech scripts: Japanese.
+
+## Domain language
+
+| Term | Meaning |
+| --- | --- |
+| Paper | Uploaded exam (`papers` + `paper_pages`). Status: `uploaded` → `analyzing` → `ready` \| `failed`. |
+| Inventory | Model-generated directory of all problems, including their numbers, full statements, and start/end pages. Validated before detailed analysis. |
+| Analysis draft | `papers.analysisDraft`: inventory plus fully validated problems. Saved after each problem; retained on failure for resume. |
+| Problem | One extracted item. Sub-questions of a 大题 stay one problem. Strategy: `student_first` (先练后讲) or `direct_teach` (直接精讲). |
+| Tutor | Persona + voice. Default preset: 大吉岭 from Girls und Panzer (math). Other presets: 远坂凛 from Fate/stay night (physics), 晴人 (chemistry), 小樱 (English/文科). |
+| Session | One classroom sitting: one paper + one tutor, with a paper/problem snapshot. Progress is per-problem `pending` \| `active` \| `done`. |
+| Coverage | Per-session, per-problem evidence for `solution`, `knowledge`, `skills`, and `pitfalls`, stored in `sessions.coverage`. |
+| Turn | One main tutor LLM call, with optional message/board repair calls. Streams NDJSON `TurnEvent`s. Ends with `wait` \| `continue` \| `next` \| `finish` on success. |
+| Board | Per-problem chalkboard page. Blocks of Markdown/LaTeX the student can treat as notes. |
+| Speech | Japanese TTS script stored on tutor text messages (`messages.speech`). |
+
+Subjects: `数学 物理 化学 生物 语文 英语 历史 地理 政治`.
+
+## Layout (classroom)
+
+```
+┌──────────────┬─────────────────────────────┐
+│ Chat         │ Blackboard (right, larger)  │
+│ (left)       │ AI writes board work here   │
+│ user ↔ tutor │ Markdown + LaTeX, chalk UI  │
+└──────────────┴─────────────────────────────┘
+```
+
+Other routes: `/` home, `/papers` + `/papers/new` + `/papers/[id]`, `/tutors` + `/tutors/[id]`, `/settings`, `/classroom/[id]`.
+
+## Architecture
+
+```
+src/
+  app/                 pages + Route Handlers (NDJSON streams for analyze/turn)
+  components/          AppHeader, Markdown, Paper*, TutorEditor, classroom/*
+  db/                  drizzle schema + pg Pool (DATABASE_URL)
+  lib/types.ts         shared types, PROVIDERS, DTOs, event unions
+  lib/text.ts          math normalize, atomic reveal, short-message splitting, language checks
+  lib/client/media.ts  JPEG downscale, PDF→image (pdfjs in /public/pdfjs)
+  lib/server/
+    llm.ts             OpenAI-compat / Anthropic / Gemini streaming
+    analysis.ts        inventory and complete-problem validation
+    prompts.ts         inventory + analysis + tutor system prompts
+    protocol.ts        incremental <tag> parser (not JSON — LaTeX-safe)
+    tutor-output.ts    Chinese/Japanese message repair and coverage evidence checks
+    locks.ts           PostgreSQL advisory locks using a separate connection pool
+    settings.ts        provider + Fish keys (DB override, else env)
+    data.ts            DTO mappers, preset tutors, classroom load
+```
+
+API (all `force-dynamic`):
+
+| Path | Role |
+| --- | --- |
+| `POST /api/papers` then `POST /api/papers/:id/pages` | Create paper; append page images (data URLs). PDF is rasterized in the browser first. |
+| `POST /api/papers/:id/analyze` | Inventory then per-problem vision analysis, streamed as NDJSON `AnalysisEvent`. Body `{ restart?: boolean }`; default resumes saved draft. Continues after browser disconnect. |
+| `PATCH/DELETE /api/papers/:id` | Edit/delete under the paper lock. Subject cannot change after publication or while a draft exists. |
+| `POST /api/sessions` | Start classroom (`paperId` + `tutorId`). Requires complete, error-free `ready` paper; saves snapshot in a transaction. |
+| `PATCH/DELETE /api/sessions/:id` | Jump/delete under the session lock; active generation returns `409`. |
+| `POST /api/sessions/:id/turn` | Tutor turn. Body `{ text?, images? }`. Streams `TurnEvent` NDJSON. |
+| `POST /api/tts` | Fish Audio mp3. Body `{ text, voiceId }`. In-memory cache by model+voice+text. |
+| `GET /api/voices` | Fish Audio voice search (default `lang=ja`). |
+| `GET/PUT /api/settings` | Provider keys, models, Fish key, `autoContinue`. Keys never returned in full. |
+| `GET /api/health` | `SELECT 1`. |
+
+Settings keys: DB row `app_settings.id = 1`, else env. Provider env: `OPENAI_API_KEY`; `ANTHROPIC_API_KEY` / `CLAUDE_API_KEY`; `XAI_API_KEY` / `GROK_API_KEY`; `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`. Fish: `FISH_API_KEY` / `FISH_AUDIO_API_KEY`. Default Fish model `s2.1-pro`. Default voice `db1553e441c84b49bf250912563ec8fc`.
+
+DB (Drizzle, `src/db/schema.ts`): `app_settings`, `tutors`, `papers`, `paper_pages` (base64 image per page), `problems`, `sessions`, `messages`, `boards` (unique on session+problemIdx).
+
+Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullable for legacy sessions), and `sessions.coverage` (default `{}`). Sync schema before running this version in another environment. Do not remove these fields or use a destructive schema reset to resolve migration issues.
+
+## Analysis and classroom integrity
+
+- Publish problems only after every inventory entry passes closed-tag, matching-number/page, and required-field validation. A partial result must never emit `done` or become `ready`.
+- Each problem gets up to two analysis attempts. Save completed results outside the retry loop so a database-write failure cannot duplicate a problem.
+- Replace published problems atomically. A failed reanalysis keeps the prior published set; existing classrooms keep their original snapshot. Legacy sessions without snapshots are backfilled before replacing problems.
+- Draft problem events use provisional negative IDs. After publication, load persisted problems rather than treating provisional IDs as database IDs.
+- Analysis continues when its browser stream disconnects. A process restart stops the task, but preserves completed draft work. The student must click to resume; there is no durable job worker or automatic restart.
+- `tryOperationLock` must reserve a connection from the separate lock pool, never the database work pool. Release on success, failure, cancellation, and pre-stream errors. Keep paper/session lock namespaces consistent across app processes.
+- Serialize session generation, jumps, and deletion. A `409` means another operation owns the lock. Client retries must be bounded; do not remove server locks to make an interrupted request succeed.
+- Only accept coverage quotes of at least six non-whitespace characters that appear in actual Chinese messages or board content emitted in the current turn. Persist coverage by problem index.
+- When coverage is incomplete, convert `next`/`finish` to `wait`. When finishing a covered problem, visit any unfinished problems, including ones skipped earlier. Only complete the session when every problem is done.
+- OpenAI/xAI requests must send the requested output budget (`max_completion_tokens` for OpenAI gpt-5/o-series, otherwise `max_tokens`). All adapters must reject truncation, safety stops, and premature stream termination.
+
+## Streaming protocol
+
+Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse while the model is still streaming (`createTagParser` in `protocol.ts`).
+
+**Analysis**: `inventorySystemPrompt` first produces a closed `<inventory count="N" pages="P">` with `<overview>` and unique `<item number="1" page="1" endpage="1">` entries. `analysisSystemPrompt` then produces exactly one closed `<problem>` per call with `<content> <answer> <solution> <keypoints> <knowledge> <skills> <reason> <student>`. Validated draft problems persist in `papers.analysisDraft`; only the complete set is published. Default retry resumes the draft; `{ restart: true }` rebuilds the inventory.
+
+**Tutor turn** (`buildTutorSystem`):
+
+```
+<msg>
+<zh>中文消息（Markdown + $LaTeX$）</zh>
+<ja>[語氣] 日本語の音声台本。数式は日本語で読む。LaTeX/中文禁止。</ja>
+</msg>
+<board mode="append|replace" title="本页标题">
+板书 Markdown
+</board>
+<covered topic="solution|knowledge|skills|pitfalls">Exact quote from Chinese chat or board in this turn</covered>
+<action>wait|continue|next|finish</action>
+```
+
+- `<msg>` and `<board>` may interleave. Exactly one `<action>` at the end.
+- `wait` = wait for the student. `continue` = client auto-fires another turn (cap 6). `next` / `finish` update session progress.
+- `next` / `finish` require all four coverage topics, backed by actual emitted content. Finish cannot skip unfinished problems. Coverage is a progress guard, not independent semantic verification.
+- Sessions keep a paper/problem snapshot. Paper and session mutations use separate PostgreSQL advisory-lock connections, including across app processes.
+- PDF, upload UI and server share `MAX_PAPER_PAGES = 12`; oversized PDFs are rejected explicitly.
+- Client pump (`Classroom.tsx`): play each `message` (TTS + reveal), then apply `board` / `problem` / `done`. User may interrupt; pending input flushes the queue.
+
+## Message and voice handling
+
+- `prepareTutorMessages` checks short Chinese text plus Japanese speech. Invalid or long messages get a repair call; Chinese repairs must preserve the original content. If repair fails, retain usable Chinese chunks with empty speech. Unrepaired Japanese chat must fail rather than appear in a Chinese bubble.
+- Short-message splitting targets 80 characters and preserves atomic formulas, bold spans, and links. One indivisible token can exceed the target. The 2-6 bubble count is a prompt target, not a hard runtime limit; preserve content during fallback.
+- Japanese board text/title is translated through a separate repair call and checked again. `/api/tts` also validates speech before contacting Fish.
+- Muted mode must skip voice prefetch, synthesis, and replay. Use the text reveal timer directly; never wait for inaudible playback.
+- Current limits: LLM call 180 seconds, full tutor turn 270 seconds, full analysis 750 seconds, Fish request 12 seconds, browser TTS request 15 seconds. Preserve cancellation and text fallback when changing these limits.
+- On interruption, preserve all queued student inputs in order. On unmount, cancel generation/TTS, finish reveal, pause audio, clear pending work, and revoke blob URLs. Optimistic message IDs must be unique.
+- Clean up PDFs through the `getDocument` loading task's `destroy()`. The bundled pdf.js 6.4 API does not expose `destroy()` on the resolved document proxy.
+
+## Invariants
+
+1. **Language split.** Chat + board + UI = Simplified Chinese. TTS `<ja>` / `speech` = Japanese. Do not play Chinese through Fish Audio. Do not put Japanese in the chat bubble or on the board.
+2. **TTS sync.** Reveal tokens from `tokenizeForReveal` (LaTeX/bold/links stay atomic). Progress follows `audio.currentTime / duration`. Fallback timer if TTS is missing or muted.
+3. **Short bubbles.** Prompts and fallbacks must keep tutor text as multiple short messages. Never concatenate a turn into one paragraph.
+4. **Markdown + LaTeX.** `$...$` / `$$...$$` only (not `\(`/`\[` in model output). Render through `components/Markdown.tsx` (`remark-math` + `rehype-katex` + `normalizeMath`). Typewriter must not split a formula.
+5. **Board is notes, not chat.** Concise structured Markdown: `##` sections, `**bold**` = chalk highlight, `>` = theorem box, `- [x]` = recap ticks. One board page per problem.
+6. **EPDL coverage.** Every problem must cover: full solution, textbook knowledge points, methods/skills, pitfalls. Honor `student_first` vs `direct_teach`, but the tutor may override with a one-line explanation to the student.
+7. **Side questions.** Student can interrupt any time. Answer, then return to the current problem.
+8. **Secrets.** API keys live in settings/env. Public settings expose `hasKey` + masked preview only. Never log raw keys or page image payloads.
+9. **No extra LLM/TTS SDKs.** Extend `llm.ts` / `/api/tts` with `fetch`. Keep the Fish call shape: `Authorization: Bearer`, header `model`, body `{ text, reference_id, format: "mp3" }`.
+
+## Code conventions
+
+- TypeScript strict. Import via `@/*` → `src/*`.
+- Shared contracts in `src/lib/types.ts`. DB rows stay in `data.ts`; API/UI speak DTOs.
+- Server-only I/O in `src/lib/server` and Route Handlers. Browser helpers in `src/lib/client`.
+- User-facing copy is Chinese. Code, comments, and this file are English.
+- `"use client"` only for interactive trees (`Classroom`, `Blackboard`, `Markdown`, editors). Pages that can be server components should stay server components (`dynamic = "force-dynamic"` when they read the DB).
+- Tailwind utility classes + the chalk/markdown rules already in `globals.css`. Match existing classroom chrome; do not introduce a second design system.
+- Prefer small, explicit functions over new frameworks. Match the surrounding file's style.
+- After behavior changes: `npm run typecheck` and `npm run lint`. Classroom/UI changes need a real browser pass (chat, board, TTS reveal, paper upload, settings).
+- After completing code updates and the relevant checks, run `codegraph sync` from the project root to update the code index before reporting completion.
+
+## Commands
+
+```bash
+npm run dev          # next dev
+npm run build        # next build
+npm run start        # next start (requires a completed build)
+npm run lint
+npm run typecheck    # tsc --noEmit
+codegraph sync       # update the code index after code changes
+```
+
+Requires `DATABASE_URL` in the environment or root `.env.local`. `drizzle.config.ts` loads the same Next.js environment files. Local PostgreSQL runs through `compose.yaml` (`npm run db:up`); initialize its schema with `npm run db:push`. See `README.md` and `.env.example`. Schema: `src/db/schema.ts`.
+
+## Local lifecycle and regression checks
+
+- When asked to close AniLearn, stop only the identified project server process. Stop its local database with `docker compose --env-file .env.local stop`; preserve the `anilearn_postgres_data` volume. Do not stop all Node processes or Docker Desktop.
+- A user's shutdown request takes precedence over automatically starting a preview. Do not restart the app after a documentation-only update.
+- Run provider/parser checks with `node output/audit/provider-audit.cjs`. Results are written to `output/audit/fix-provider-results.json`.
+- API regression requires a completed build and PostgreSQL. Start `node output/audit/runtime.cjs`, then run `node output/audit/fix-api.mjs`. The harness creates the isolated `anilearn_audit_20261007` database, mock provider on `127.0.0.1:4107`, and app on `127.0.0.1:3107`. It refuses to reuse an existing test database.
+- Shut down the harness through `GET http://127.0.0.1:4107/shutdown` and verify cleanup. Never point its SQL fixture endpoint at the user's application database or delete a pre-existing test database without checking ownership.
+- Browser scripts are `output/audit/browser-audit.js`, `browser-upload-settings.js`, and `browser-fix-edge.js` for classroom/voice, upload/settings, and interruption/timeout flows. Run against the isolated harness using Playwright; screenshots belong in `output/playwright/`.
+- Historical `api-audit.mjs` and the original `*-results.json` record defects before repair. Use `fix-api.mjs` and `fix-*-results.json` for current expectations. The audit and repair reports are in `output/audit/`.
+
+## Verification limits
+
+The October 7, 2026 repair passed typecheck, lint, build, 18 API regression groups, provider/parser checks, and browser flows using mock models/audio. Real provider and Fish Audio behavior was not verified because no live keys were configured. Do not present these checks as live integration or teaching-quality acceptance.
+
+The inventory itself is generated by a vision model; structural validation cannot detect every OCR omission. Answers and textbook sources have no independent verification or retrieval. Coverage quotes guard progress, but do not prove semantic completeness. Language checks are heuristic, and Chinese reveal follows Japanese audio duration rather than word-level alignment. Validate these limits with real papers, standard answers, and live speech before claiming product acceptance.
+
+## When changing X, also touch Y
+
+| If you change | Also check |
+| --- | --- |
+| Tutor prompt / `<msg>` shape | `prompts.ts`, `turn/route.ts` parser, `Classroom.tsx` pump, TTS reveal |
+| Board Markdown | `Blackboard.tsx`, `globals.css` `.board`/chalk rules, export notes |
+| Analysis tags | `prompts.ts` inventory/analysis prompts, `analysis.ts`, `analyze/route.ts`, draft resume and publication |
+| Coverage / course completion | `types.ts`, `schema.ts`, `prompts.ts`, `tutor-output.ts`, turn progress and jumped problems |
+| Snapshot / reanalysis | `schema.ts`, `data.ts`, session creation, analysis publication, old classrooms |
+| Provider API | `llm.ts`, `types.ts` `PROVIDERS`, `settings.ts`, `/settings` UI |
+| TTS | `/api/tts`, `text.ts` validation, `tutor-output.ts`, `Classroom.tsx` prefetch/play/replay/mute/cleanup |
+| Upload / PDF limits | `types.ts` `MAX_PAPER_PAGES`, `media.ts`, upload page and pages API |
+| Operation locks | `locks.ts`, paper/session mutation handlers, cancellation and concurrency regressions |
+| Schema | `schema.ts`, DTO mappers, every Route Handler that reads the table |

@@ -1,0 +1,433 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system,
+    "Segoe UI", sans-serif;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background: #eef2f8;
+}
+
+/* ---------- scrollbars ---------- */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.35) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 999px;
+}
+.chalk-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+.chalk-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.chalk-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+}
+
+/* ---------- Markdown (chat & cards) ---------- */
+.md {
+  line-height: 1.75;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md > :last-child {
+  margin-bottom: 0;
+}
+.md p {
+  margin: 0.35em 0;
+}
+.md ul {
+  list-style: disc;
+  padding-left: 1.25em;
+  margin: 0.35em 0;
+}
+.md ol {
+  list-style: decimal;
+  padding-left: 1.45em;
+  margin: 0.35em 0;
+}
+.md li {
+  margin: 0.1em 0;
+}
+.md strong {
+  font-weight: 700;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-weight: 700;
+  margin: 0.5em 0 0.25em;
+  line-height: 1.4;
+}
+.md h1 {
+  font-size: 1.2em;
+}
+.md h2 {
+  font-size: 1.1em;
+}
+.md h3 {
+  font-size: 1.02em;
+}
+.md code {
+  background: rgba(15, 23, 42, 0.07);
+  padding: 0.05em 0.35em;
+  border-radius: 5px;
+  font-size: 0.9em;
+}
+.md pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.7em 0.9em;
+  border-radius: 10px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.md pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+.md blockquote {
+  border-left: 3px solid #93c5fd;
+  padding: 0.15em 0.8em;
+  color: #475569;
+  margin: 0.5em 0;
+  background: rgba(147, 197, 253, 0.12);
+  border-radius: 0 8px 8px 0;
+}
+.md table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.92em;
+  display: block;
+  overflow-x: auto;
+}
+.md th,
+.md td {
+  border: 1px solid #cbd5e1;
+  padding: 0.25em 0.6em;
+}
+.md th {
+  background: #f1f5f9;
+}
+.md a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+.md hr {
+  border: 0;
+  border-top: 1px dashed #cbd5e1;
+  margin: 0.6em 0;
+}
+.md .katex-display {
+  margin: 0.45em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15em 0;
+}
+.md .katex {
+  font-size: 1.05em;
+}
+.md-invert code {
+  background: rgba(255, 255, 255, 0.2);
+}
+.md-invert blockquote {
+  border-color: rgba(255, 255, 255, 0.6);
+  color: #eff6ff;
+  background: rgba(255, 255, 255, 0.1);
+}
+.md-invert a {
+  color: #fff;
+}
+.md-invert th,
+.md-invert td {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.md-invert th {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ---------- Chalkboard ---------- */
+.board-frame {
+  background: linear-gradient(145deg, #50565d, #2b2f34);
+  box-shadow:
+    0 24px 50px -24px rgba(15, 23, 42, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.chalkboard {
+  background-color: #1f3a35;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .08 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+    radial-gradient(ellipse at 18% 8%, rgba(255, 255, 255, 0.08), transparent 55%),
+    radial-gradient(ellipse at 85% 95%, rgba(0, 0, 0, 0.28), transparent 60%),
+    linear-gradient(160deg, #26463f 0%, #1e3732 55%, #172c28 100%);
+  box-shadow: inset 0 0 70px rgba(0, 0, 0, 0.45);
+}
+.chalk {
+  font-family: "LXGW WenKai Screen", "LXGW WenKai", "Kaiti SC", "STKaiti", "KaiTi", "楷体", serif;
+  color: #f2efe6;
+  font-size: 1.12rem;
+  line-height: 1.9;
+  text-shadow:
+    0 0 1px rgba(255, 255, 255, 0.35),
+    0 0 6px rgba(255, 255, 255, 0.06);
+  letter-spacing: 0.01em;
+}
+.chalk p {
+  margin: 0.25em 0;
+}
+.chalk h1 {
+  display: inline-block;
+  font-size: 1.85em;
+  line-height: 1.3;
+  color: #fbfaf5;
+  padding-bottom: 0.1em;
+  border-bottom: 3px solid #6cb4ff;
+  margin: 0.1em 0 0.5em;
+}
+.chalk h2 {
+  display: inline-block;
+  font-size: 1.28em;
+  line-height: 1.45;
+  color: #8fd0ff;
+  border: 2px solid #5aa8f0;
+  border-radius: 6px;
+  padding: 0.02em 0.55em;
+  margin: 0.7em 0 0.45em;
+  box-shadow: 0 0 10px rgba(90, 168, 240, 0.15);
+}
+.chalk h3 {
+  font-size: 1.12em;
+  color: #ffe27a;
+  margin: 0.55em 0 0.2em;
+}
+.chalk h4 {
+  color: #ffc6e1;
+  margin: 0.4em 0 0.1em;
+}
+.chalk strong {
+  color: #ffe27a;
+  font-weight: 600;
+}
+.chalk em {
+  color: #ffa8cf;
+  font-style: normal;
+}
+.chalk del {
+  color: #ff8a8a;
+}
+.chalk a {
+  color: #8fd0ff;
+}
+.chalk ul {
+  list-style: none;
+  padding-left: 1.15em;
+  margin: 0.3em 0;
+}
+.chalk ul > li {
+  position: relative;
+}
+.chalk ul > li::before {
+  content: "•";
+  position: absolute;
+  left: -0.95em;
+  color: #8fd0ff;
+}
+.chalk ol {
+  list-style: decimal;
+  padding-left: 1.7em;
+  margin: 0.3em 0;
+}
+.chalk ol > li::marker {
+  color: #ffe27a;
+}
+.chalk li {
+  margin: 0.15em 0;
+}
+.chalk ul.contains-task-list {
+  border: 2px solid #5fcf93;
+  border-radius: 12px;
+  padding: 0.45em 0.9em 0.45em 2.1em;
+  background: rgba(95, 207, 147, 0.06);
+  margin: 0.6em 0;
+}
+.chalk li.task-list-item::before {
+  content: "✓";
+  color: #7ee2a8;
+  font-weight: 700;
+  left: -1.25em;
+}
+.chalk li.task-list-item input {
+  display: none;
+}
+.chalk blockquote {
+  border: 2px solid #5aa8f0;
+  border-radius: 12px;
+  padding: 0.45em 0.9em;
+  margin: 0.6em 0;
+  background: rgba(90, 168, 240, 0.07);
+}
+.chalk blockquote p {
+  margin: 0.15em 0;
+}
+.chalk hr {
+  border: 0;
+  border-top: 2px dashed rgba(255, 255, 255, 0.22);
+  margin: 0.8em 0;
+}
+.chalk code {
+  color: #9ef0d0;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 0 0.3em;
+  border-radius: 4px;
+  font-family: inherit;
+}
+.chalk pre {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 0.5em 0.8em;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.chalk table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+}
+.chalk th,
+.chalk td {
+  border: 1.5px solid rgba(255, 255, 255, 0.45);
+  padding: 0.2em 0.7em;
+}
+.chalk th {
+  color: #ffe27a;
+}
+.chalk .katex {
+  font-size: 1.08em;
+  color: #fdfcf7;
+}
+.chalk .katex-display {
+  margin: 0.4em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.1em 0;
+}
+.board-cols {
+  column-count: 2;
+  column-gap: 4.5rem;
+  column-rule: 2px dashed rgba(255, 255, 255, 0.14);
+  column-fill: auto;
+  height: 100%;
+}
+.board-cols h2,
+.board-cols h3 {
+  break-after: avoid;
+}
+.board-cols blockquote,
+.board-cols li,
+.board-cols .katex-display {
+  break-inside: avoid;
+}
+.chalk-in {
+  animation: chalkIn 1.6s cubic-bezier(0.3, 0.7, 0.3, 1) both;
+}
+@keyframes chalkIn {
+  0% {
+    opacity: 0;
+    clip-path: inset(0 100% 0 0);
+    filter: blur(1.5px);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    filter: blur(0);
+  }
+}
+
+/* ---------- misc animations ---------- */
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #8ea2c6;
+  display: inline-block;
+  animation: typingDot 1.2s infinite ease-in-out both;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes typingDot {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.scan {
+  animation: scan 2.4s ease-in-out infinite;
+}
+@keyframes scan {
+  0% {
+    top: 0%;
+  }
+  50% {
+    top: 96%;
+  }
+  100% {
+    top: 0%;
+  }
+}
+.fade-up {
+  animation: fadeUp 0.35s ease-out both;
+}
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.voice-bar {
+  animation: voiceBar 0.9s ease-in-out infinite;
+  transform-origin: bottom;
+}
+@keyframes voiceBar {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}

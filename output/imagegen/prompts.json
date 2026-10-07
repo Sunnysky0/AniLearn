@@ -1,0 +1,37 @@
+{
+  "model": "gpt-image-2.5-sunburst",
+  "requestedModel": "image-2.5-sunburst",
+  "mode": "explicit model REST API (gateway returns image URLs)",
+  "assets": [
+    {
+      "name": "darjeeling",
+      "size": "1024x1024",
+      "prompt": "Use case: identity-preserve. Input image 1 is the authoritative character identity, hairstyle, anime art style and clothing reference, not a layout to copy. Create a NEW square high-quality head-and-shoulders avatar of this exact Darjeeling from Girls und Panzer. Faithfully preserve the reference face, turquoise blue eyes, pale blonde hair color, exact swept segmented bangs and braided/curled low buns on BOTH sides at jaw/neck level. Preserve the reference St. Gloriana everyday uniform: solid navy blue V-neck knitted pullover, white collared shirt, black necktie, small school crest on the chest. Give her a calm friendly confident smile and a porcelain tea cup with blue geometric decoration near the bottom edge. Use the recognizable clean traditional Japanese anime cel drawing from the reference, precise linework, limited soft shading, no redesign. Backdrop: very softly blurred cream tea room with subtle blue accents. Composition: centered head and shoulders, full hair silhouette and both low braids visible, safe padding for a circular crop, face clear at small thumbnail size, looking at viewer. No red jacket, no burgundy uniform, no gold-trimmed blazer, no single side bun, no long ponytail, no jewelry, no text, no watermark, no frame, one character, fully clothed.",
+      "operation": "edit",
+      "referenceImage": "025_darjeeling.webp"
+    },
+    {
+      "name": "rin",
+      "size": "1024x1024",
+      "prompt": "Use case: illustration-story. Asset type: square anime tutor avatar matching a polished Japanese anime cel portrait set for a high-school study app. Subject: Rin Tohsaka from Fate/stay night, a recognizable faithful character portrait: long dark chestnut hair in her distinctive twin tails tied with black ribbons, parted bangs, bright turquoise blue-green eyes, confident composed expression with a slight knowing smile, her familiar modest red long-sleeved high-neck sweater with small white cross detail near the collar. Backdrop: softly blurred pale blue physics classroom with faint laboratory apparatus shapes. Composition: centered head and shoulders, entire head and black hair ribbons in frame, generous safe padding for circular crop, face large and readable at thumbnail size, eye-level looking toward viewer. Style: precise clean Japanese anime cel illustration, subtle painterly shading, faithful Fate character proportions, bright soft lighting, tasteful pastel background. Constraints: fully clothed, one character only, no text, no lettering, no watermark, no frame, no photorealism, no weapons, no extra characters, no blue bob haircut."
+    },
+    {
+      "name": "haruto",
+      "size": "1024x1024",
+      "prompt": "Use case: illustration-story. Asset type: square anime tutor avatar matching a polished Japanese anime cel portrait set for a high-school study app. Subject: Haruto, an original cheerful young male chemistry tutor, tousled chestnut brown short hair, friendly hazel eyes, bright relaxed smile, white lab coat over a neatly buttoned pale blue shirt. Backdrop: softly blurred light mint chemistry classroom with subtle glassware silhouettes. Composition: centered head and shoulders, entire hair silhouette in frame, generous padding for circular crop, readable face at thumbnail size, eye-level toward viewer. Style: precise clean anime linework and subtle painterly shading, bright soft lighting, tasteful pastel background. Constraints: fully clothed, one character only, no text, no lettering, no watermark, no logo, no frame, no photorealism."
+    },
+    {
+      "name": "sakura",
+      "size": "1024x1024",
+      "prompt": "Use case: illustration-story. Asset type: square anime tutor avatar matching a polished Japanese anime cel portrait set for a high-school study app. Subject: Sakura, an original upbeat young female literature and English tutor, soft rosy chestnut shoulder-length hair, small cherry blossom hair clip, warm brown eyes, welcoming smile, cream cardigan over white shirt with a modest burgundy ribbon. Backdrop: softly blurred pale peach reading room with indistinct bookshelves. Composition: centered head and shoulders, entire hair silhouette in frame, generous padding for circular crop, readable face at thumbnail size, eye-level toward viewer. Style: precise clean anime linework and subtle painterly shading, bright soft lighting, tasteful pastel background. Constraints: fully clothed, one character only, no text, no lettering, no watermark, no logo, no frame, no photorealism."
+    },
+    {
+      "name": "hero",
+      "size": "1536x1024",
+      "prompt": "Use case: identity-preserve. Input image 1 is the authoritative Darjeeling character identity, face, hairstyle, clothing and traditional anime cel art reference. Create a NEW landscape homepage illustration for AniLearn, a one-to-one high-school tutoring platform. Reproduce this exact Darjeeling from Girls und Panzer: pale blonde swept segmented fringe and braided/curled low buns on BOTH sides at the jaw/neck, turquoise blue eyes, familiar gentle confident expression. Clothing must accurately follow the reference: navy blue V-neck knitted pullover with a small St. Gloriana chest crest over a white collared shirt and black necktie, blue pleated skirt where visible. Scene: warm sunlit classroom, Darjeeling is a friendly tutor standing beside a large forest-green chalkboard with a clean parabola, circle and triangle, holding a blue-and-white porcelain tea cup in one hand and gently indicating the diagrams with the other. A study desk with an open exam paper and closed textbook in foreground. Faithful traditional Japanese anime cel character rendering consistent with the reference, softly painted classroom background. Wide balanced composition with her face and upper body clearly visible, large chalkboard, generous margins for a 16:10 crop. No red jacket, no burgundy uniform, no gold-trimmed blazer, no single side bun, no character redesign, no additional characters, no text, no lettering, no watermark, no speech bubbles, no software UI, no weapons, fully clothed.",
+      "operation": "edit",
+      "referenceImage": "025_darjeeling.webp"
+    }
+  ],
+  "referenceImage": "025_darjeeling.webp"
+}

@@ -1,0 +1,36 @@
+node_modules/
+.next/
+out/
+build/
+coverage/
+.vercel/
+*.tsbuildinfo
+
+# Local runtime and developer tooling
+.codegraph/
+.playwright-cli/
+tmp/
+.cache/
+.eslintcache
+
+# Local logs and generated server output
+*.log
+
+# Local credentials; retain the setup template
+.env*
+!.env.example
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Generated visual and audit artifacts. Keep reusable audit scripts and reports.
+output/imagegen/*
+!output/imagegen/prompts.json
+!output/imagegen/assets.json
+output/playwright/
+output/audit/*.json
+output/audit/*.png
+output/audit/*.pdf
+output/audit/*notes.md

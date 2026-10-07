@@ -1,0 +1,41 @@
+{
+  "model": "gpt-image-2.5-sunburst",
+  "darjeelingReference": "025_darjeeling.webp",
+  "assets": [
+    {
+      "name": "darjeeling",
+      "path": "public/avatars/darjeeling.png",
+      "width": 512,
+      "height": 512,
+      "bytes": 123460
+    },
+    {
+      "name": "rin",
+      "path": "public/avatars/rin.png",
+      "width": 512,
+      "height": 512,
+      "bytes": 111555
+    },
+    {
+      "name": "haruto",
+      "path": "public/avatars/haruto.png",
+      "width": 512,
+      "height": 512,
+      "bytes": 119067
+    },
+    {
+      "name": "sakura",
+      "path": "public/avatars/sakura.png",
+      "width": 512,
+      "height": 512,
+      "bytes": 146162
+    },
+    {
+      "name": "hero",
+      "path": "public/images/hero.jpg",
+      "width": 1536,
+      "height": 960,
+      "bytes": 194428
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+async (page) => {
+  await page.unroute('**/api/tts');
+  const api = async (url, method, data) => (await page.request.fetch('http://127.0.0.1:3107' + url, { method, data })).json();
+  const results = [];
+  await api('/api/settings', 'PUT', { fish: { enabled: false }, providers: { openai: { chatModel: 'audit-teach' } } });
+  const s = await api('/api/sessions', 'POST', { paperId: 1, tutorId: 1 });
+  const submitted = [];
+  const observe = request => { if (request.url().endsWith('/turn')) submitted.push(request.postDataJSON()); };
+  page.on('request', observe);
+  await page.goto('http://127.0.0.1:3107/classroom/' + s.id);
+  await page.getByRole('button', { name: '开始上课', exact: true }).click();
+  await page.getByRole('button', { name: '老师更新了板书', exact: true }).waitFor();
+  await page.getByRole('button', { name: '给我一点提示', exact: true }).click();
+  await page.getByRole('button', { name: '能再讲一遍吗？', exact: true }).click();
+  for (let i = 0; i < 30 && !submitted.some(p => p.text === '能再讲一遍吗？'); i++) await page.waitForTimeout(500);
+  await page.evaluate(data => localStorage.setItem('audit-edge-inputs', JSON.stringify(data)), submitted);
+  if (!submitted.some(p => p.text === '给我一点提示') || !submitted.some(p => p.text === '能再讲一遍吗？')) throw new Error('An interrupted student input was lost');
+  results.push({ test: 'two student inputs interrupt and both are submitted in order', outcome: 'pass', texts: submitted.map(p => p.text).filter(Boolean) });
+  await page.goto('http://127.0.0.1:3107/papers');
+  page.off('request', observe);
+  await api('/api/settings', 'PUT', { fish: { enabled: true, apiKey: 'audit-fake-fish-key' }, providers: { openai: { chatModel: 'audit-teach' } } });
+  const timeoutSession = await api('/api/sessions', 'POST', { paperId: 1, tutorId: 1 });
+  let ttsRequests = 0;
+  await page.route('**/api/tts', async route => {
+    ttsRequests++;
+    await new Promise(r => setTimeout(r, 18000));
+    await route.abort().catch(() => {});
+  });
+  await page.goto('http://127.0.0.1:3107/classroom/' + timeoutSession.id);
+  await page.getByRole('button', { name: '开始上课', exact: true }).click();
+  await page.getByText(/语音等待超时，已切换为文字显示/).waitFor({ timeout: 22000 });
+  await page.getByText('先试着解', { exact: false }).waitFor({ timeout: 6000 });
+  results.push({ test: 'stalled TTS times out and Chinese text continues', outcome: 'pass', ttsRequests });
+  await page.goto('http://127.0.0.1:3107/papers');
+  const before = ttsRequests;
+  await page.waitForTimeout(1200);
+  if (ttsRequests !== before) throw new Error('TTS continued after classroom unmount');
+  results.push({ test: 'leaving classroom cancels pending voice and prevents queued requests', outcome: 'pass' });
+  await page.unroute('**/api/tts');
+  await page.evaluate(r => localStorage.setItem('audit-edge-results', JSON.stringify(r)), results);
+  return results;
+}

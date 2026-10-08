@@ -176,12 +176,19 @@ npm run build        # next build
 npm run start        # next start (requires a completed build)
 npm run lint
 npm run typecheck    # tsc --noEmit
+npm run launcher     # Windows full-screen TUI; auto-start app and PostgreSQL
+npm run launcher:test # launcher core and terminal-layout regression tests
 codegraph sync       # update the code index after code changes
 ```
 
 Requires `DATABASE_URL` in the environment or root `.env.local`. `drizzle.config.ts` loads the same Next.js environment files. Local PostgreSQL runs through `compose.yaml` (`npm run db:up`); initialize its schema with `npm run db:push`. See `README.md` and `.env.example`. Schema: `src/db/schema.ts`.
 
 ## Local lifecycle and regression checks
+
+- The Windows TUI entrypoint is `AniLearn.cmd` / `npm run launcher`; implementation lives in `scripts/launcher/`. It uses Ink 6, `tsx`, a local authenticated named pipe, and a detached lifecycle manager. Runtime files, sanitized logs, preferences and build fingerprints are ignored under `.anilearn/`.
+- Launcher `Q` / Ctrl+C closes the app process tree and project PostgreSQL via Compose `stop`, preserving the volume. `D` explicitly detaches; unexpected panel loss defaults to cleanup. Verify PID plus creation time and command before stopping, and confirm the Compose project's working directory before managing its container.
+- Launcher database monitoring is read-only and counts metadata; never query messages, paper payloads or settings secrets for the dashboard. Keep logs sanitized before persistence and display.
+- Lifecycle integration checks: `node --import tsx scripts/launcher/lifecycle-audit.ts`. This creates a unique owned Compose project, environment file, app/database ports and volume under `.anilearn/`; it checks absence before creation and only removes its own test volume. Do not run against the application database. Keep AniLearn stopped after launcher verification.
 
 - When asked to close AniLearn, stop only the identified project server process. Stop its local database with `docker compose --env-file .env.local stop`; preserve the `anilearn_postgres_data` volume. Do not stop all Node processes or Docker Desktop.
 - A user's shutdown request takes precedence over automatically starting a preview. Do not restart the app after a documentation-only update.

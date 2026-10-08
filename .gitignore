@@ -12,6 +12,7 @@ coverage/
 tmp/
 .cache/
 .eslintcache
+.anilearn/
 
 # Local logs and generated server output
 *.log

@@ -4,6 +4,35 @@
 
 ## 本机启动（Windows / Docker Desktop）
 
+### TUI 启动器
+
+双击项目根目录的 `AniLearn.cmd`，或在 Windows Terminal 中运行 `npm run launcher`。需要 Node.js 22 或更新版本及已安装的 Docker Desktop；缺少 npm 依赖时会自动安装。启动器自动开启 Docker 的 Linux 引擎、本项目 PostgreSQL 和 AniLearn，默认使用生产模式，保留上次选择的模式与端口。网页就绪后按 `O` 打开。
+
+面板显示应用、数据库与 Docker 状态、按来源筛选的实时日志、CPU/内存曲线、数据库容器收发流量，以及只读的数据库大小、连接数和业务数量统计。不会读取消息正文、试卷内容或 API 密钥。终端变窄后按 `Tab` 切换日志、资源和统计；大窗口同时显示全部面板。
+
+| 按键 | 操作 |
+| --- | --- |
+| `S` / `X` / `R` | 启动全部 / 停止全部 / 重启应用 |
+| `M` / `B` / `O` | 切换生产开发模式 / 重新构建并启动 / 打开网页 |
+| `Q` / `Ctrl+C` | 关闭应用和本项目 PostgreSQL 后退出，保留数据卷 |
+| `D` | 确认后保留后台服务并退出；再次打开可重新连接 |
+| `H` | 操作菜单，方向键选择、回车执行 |
+| `1`–`4` / `/` / `E` | 日志来源 / 搜索 / 仅错误 |
+| 空格 / 方向键 / `End` | 暂停跟随 / 滚动日志 / 回到底部 |
+| `C` / `V` / `N` | CPU / 内存 / 数据库容器流量曲线 |
+| `Tab` 然后方向键 | 切到统计面板并滚动，查看全部统计与进程 |
+
+```powershell
+npm run launcher -- --port 3001 --mode development
+npm run launcher -- --no-autostart
+```
+
+生产构建按源文件、资源、配置和构建 ID 检查，未变化时复用；首次启动或输入变化时重新构建。启动器的开发模式使用 Next 的 Webpack 选项，以规避 Windows 强制结束后 Turbopack 持久缓存造成的路由异常。缺少 `.env.local` 或数据库表结构会显示修复提示，启动器不会自动同步或重置数据库。关闭时只处理已核验的 AniLearn 进程树及本项目 Compose 数据库，不关闭 Docker Desktop。终端意外退出后，后台管理器在连接丢失约 15 秒后执行同样的清理；电脑强制关机无法保证及时执行清理。
+
+运行状态、偏好、构建指纹及脱敏轮转日志位于被 Git 忽略的 `.anilearn/` 中。数据库日志仅保留生命周期信息和异常标记，过滤 SQL、参数和业务错误详情。外部手动启动的同项目服务可识别并停止，但无法接管其历史标准输出。以下手动启动方式仍然可用。
+
+### 手动启动
+
 1. 启动 Docker Desktop，使用 Linux 容器。
 2. 安装依赖：`npm install`。
 3. 首次配置时，复制环境变量模板：
@@ -78,6 +107,7 @@ Next.js 在构建收集路由时会加载数据库模块，因此构建环境也
 | --- | --- |
 | `npm run db:up` | 启动 PostgreSQL，等待健康检查通过 |
 | `npm run db:status` | 查看容器状态及端口 |
+| `docker compose --env-file .env.local stop` | 停止本项目数据库容器，保留容器和数据卷 |
 | `npm run db:down` | 停止并移除容器，保留数据库数据卷 |
 | `npm run db:push` | 将 `src/db/schema.ts` 同步到本地数据库 |
 

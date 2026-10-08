@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowLeft,
   BookOpen,
   Check,
   Circle,
@@ -34,10 +35,18 @@ import type {
   SessionDTO,
   TurnAction,
   TurnEvent,
+  TurnRequest,
   TutorDTO,
 } from "@/lib/types";
+import { GOODBYE_TEXT, turnIntentForText } from "@/lib/types";
 
-type QueueItem = Exclude<TurnEvent, { type: "user" }>;
+type ClientTurn = {
+  streamEnded: boolean;
+  failed: boolean;
+  cancelled: boolean;
+  done?: Extract<TurnEvent, { type: "done" }>;
+};
+type QueueItem = Exclude<TurnEvent, { type: "user" }> & { turn: ClientTurn };
 
 interface Props {
   session: SessionDTO;
@@ -188,6 +197,9 @@ export default function Classroom(props: Props) {
   const [showOutline, setShowOutline] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<"chat" | "board">("chat");
+  const [returnState, setReturnState] = useState<"hidden" | "waiting" | "ready">(
+    props.session.status === "completed" ? "ready" : "hidden",
+  );
 
   const queueRef = useRef<QueueItem[]>([]);
   const pumpingRef = useRef(false);
@@ -203,7 +215,9 @@ export default function Classroom(props: Props) {
   const disposedRef = useRef(false);
   const lastActionRef = useRef<TurnAction | null>(null);
   const autoCountRef = useRef(0);
-  const pendingRef = useRef<Array<{ text: string; images: string[] }>>([]);
+  const pendingRef = useRef<TurnRequest[]>([]);
+  const currentTurnRef = useRef<ClientTurn | null>(null);
+  const retryRef = useRef<TurnRequest>({});
   const optimisticId = useRef(-1);
   const prefs = useRef({ muted: false, autoContinue: props.autoContinueDefault, rate: 1 });
   const listRef = useRef<HTMLDivElement>(null);
@@ -421,11 +435,20 @@ export default function Classroom(props: Props) {
             setOverlay("none");
           } else if (item.type === "done") {
             setSession(item.session);
-            if (!flushRef.current) lastActionRef.current = item.action;
+            item.turn.done = item;
+            if (!flushRef.current && !item.turn.cancelled) {
+              lastActionRef.current = item.intent === "goodbye" ? "wait" : item.action;
+              if (item.intent === "goodbye" || item.session.status === "completed") setReturnState("waiting");
+            }
           } else if (item.type === "error") {
+            item.turn.failed = true;
+            setReturnState("hidden");
             setError(item.error);
           }
         } catch (e) {
+          item.turn.failed = true;
+          setReturnState("hidden");
+          setError(e instanceof Error ? e.message : String(e));
           console.error(e);
         }
       }
@@ -447,6 +470,18 @@ export default function Classroom(props: Props) {
       void startTurn(pending);
       return;
     }
+    const turn = currentTurnRef.current;
+    if (turn) {
+      if (turn.streamEnded && !turn.failed && !turn.cancelled && turn.done &&
+        (turn.done.intent === "goodbye" || turn.done.session.status === "completed")) {
+        setReturnState("ready");
+      }
+      if (turn.failed || turn.cancelled) {
+        lastActionRef.current = null;
+        setReturnState("hidden");
+      }
+      currentTurnRef.current = null;
+    }
     const act = lastActionRef.current;
     lastActionRef.current = null;
     if ((act === "continue" || act === "next") && prefs.current.autoContinue && autoCountRef.current < 6) {
@@ -455,10 +490,15 @@ export default function Classroom(props: Props) {
     }
   }
 
-  async function startTurn(payload: { text?: string; images?: string[] }) {
+  async function startTurn(payload: TurnRequest) {
     if (disposedRef.current) return;
     const text = payload.text ?? "";
     const images = payload.images ?? [];
+    payload = { ...payload, intent: payload.intent ?? turnIntentForText(text) };
+    const turn: ClientTurn = { streamEnded: false, failed: false, cancelled: false };
+    currentTurnRef.current = turn;
+    retryRef.current = { intent: payload.intent, problemIdx: payload.problemIdx };
+    setReturnState(payload.intent === "goodbye" ? "waiting" : "hidden");
     if (text || images.length) {
       appendMessage({
         id: optimisticId.current--,
@@ -482,7 +522,7 @@ export default function Classroom(props: Props) {
         fetch(`/api/sessions/${props.session.id}/turn`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, images }),
+          body: JSON.stringify({ text, images, intent: payload.intent, problemIdx: payload.problemIdx }),
           signal: ac.signal,
         });
       let res = await request();
@@ -497,6 +537,7 @@ export default function Classroom(props: Props) {
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
+      let receivedDone = false;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -510,9 +551,14 @@ export default function Classroom(props: Props) {
           try {
             ev = JSON.parse(line) as TurnEvent;
           } catch {
-            continue;
+            throw new Error("导师回复格式不完整，请重试。");
+          }
+          if (!ev || !["user", "message", "board", "problem", "done", "error"].includes(ev.type) || receivedDone) {
+            throw new Error("导师回复格式不完整，请重试。");
           }
           if (ev.type === "user") continue;
+          if (ev.type === "done") receivedDone = true;
+          if (ev.type === "error") turn.failed = true;
           if (
             ev.type === "message" &&
             props.ttsAvailable &&
@@ -522,13 +568,17 @@ export default function Classroom(props: Props) {
           ) {
             void getAudio(ev.message); // prefetch voice while earlier messages are still playing
           }
-          queueRef.current.push(ev);
+          queueRef.current.push({ ...ev, turn });
           void pump();
         }
       }
+      if (buf.trim() || (!receivedDone && !turn.failed)) throw new Error("导师回复提前结束，请重试。");
+      turn.streamEnded = true;
     } catch (e) {
+      turn.failed = true;
+      setReturnState("hidden");
       if (!ac.signal.aborted) {
-        queueRef.current.push({ type: "error", error: e instanceof Error ? e.message : String(e) });
+        queueRef.current.push({ type: "error", error: e instanceof Error ? e.message : String(e), turn });
         void pump();
       }
     } finally {
@@ -551,17 +601,22 @@ export default function Classroom(props: Props) {
     setError(null);
     autoCountRef.current = 0;
     lastActionRef.current = null;
+    setReturnState("hidden");
+    const intent = turnIntentForText(text);
     if (streamingRef.current || pumpingRef.current) {
       // Interrupt: flush what the tutor already said, stop generation, then ask.
-      pendingRef.current.push({ text, images });
+      pendingRef.current.push({ text, images, intent, problemIdx: intent === "complete_problem" ? session.currentIdx : undefined });
+      if (currentTurnRef.current) currentTurnRef.current.cancelled = true;
       requestFlush();
       abortRef.current?.abort();
       return;
     }
-    void startTurn({ text, images });
+    void startTurn({ text, images, intent, problemIdx: intent === "complete_problem" ? session.currentIdx : undefined });
   }
 
   function stop() {
+    if (currentTurnRef.current) currentTurnRef.current.cancelled = true;
+    setReturnState("hidden");
     lastActionRef.current = null;
     autoCountRef.current = 99;
     requestFlush();
@@ -580,6 +635,7 @@ export default function Classroom(props: Props) {
   }
 
   async function gotoProblem(i: number) {
+    setReturnState("hidden");
     setShowOutline(false);
     if (i === session.currentIdx) {
       setViewIdx(i);
@@ -943,9 +999,10 @@ export default function Classroom(props: Props) {
                   <button
                     onClick={() => {
                       setError(null);
-                      void startTurn({});
+                      void startTurn(retryRef.current);
                     }}
-                    className="inline-flex items-center gap-1 bg-neutral-900 px-3 py-1 text-white"
+                    disabled={busy !== "idle"}
+                    className="inline-flex items-center gap-1 bg-neutral-900 px-3 py-1 text-white disabled:opacity-40"
                   >
                     <RotateCcw className="h-3 w-3" /> 重试
                   </button>
@@ -980,6 +1037,12 @@ export default function Classroom(props: Props) {
           )}
 
           <div className="border-t border-neutral-200/60 bg-white/70 p-3">
+            <button
+              onClick={() => send(GOODBYE_TEXT)}
+              className="mb-2 flex w-full items-center justify-center gap-2 border border-neutral-900 bg-white px-3 py-2 text-sm font-medium text-neutral-900 hover:bg-neutral-100"
+            >
+              <ArrowLeft className="h-4 w-4" /> {GOODBYE_TEXT}
+            </button>
             <div className="thin-scroll mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
               {QUICK.map((q) => (
                 <button
@@ -1096,6 +1159,20 @@ export default function Classroom(props: Props) {
           />
         </section>
       </main>
+
+      {returnState !== "hidden" && (
+        <div className="shrink-0 border-t-2 border-neutral-900 bg-white p-3">
+          {returnState === "ready" ? (
+            <Link href="/" className="flex min-h-11 w-full items-center justify-center gap-2 bg-neutral-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-neutral-700">
+              <ArrowLeft className="h-4 w-4" /> 返回首页
+            </Link>
+          ) : (
+            <button disabled className="flex min-h-11 w-full items-center justify-center gap-2 bg-neutral-900 px-4 py-2.5 text-sm font-semibold text-white opacity-40">
+              <ArrowLeft className="h-4 w-4" /> 返回首页
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ---------------- outline drawer ---------------- */}
       {showOutline && (

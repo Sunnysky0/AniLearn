@@ -1,4 +1,4 @@
-import { COVERAGE_TOPICS, type BoardBlock, type TeachingCoverage, type TurnAction } from "@/lib/types";
+import { COVERAGE_TOPICS, type BoardBlock, type TeachingCoverage, type TurnAction, type TurnIntent } from "@/lib/types";
 import { speechStyleTag } from "@/lib/text";
 import { parseDataUrl, type LLMMessage, type LLMPart } from "./llm";
 import type { MessageRow, PaperRow, ProblemRow, TutorRow } from "./data";
@@ -80,6 +80,7 @@ export interface TutorPromptCtx {
   progress: Record<string, string>;
   history: MessageRow[];
   coverage?: TeachingCoverage;
+  intent?: TurnIntent;
 }
 
 const bullet = (arr: string[]) => (arr.length ? arr.map((s) => `- ${s}`).join("\n") : "（无）");
@@ -142,6 +143,7 @@ export function buildTutorSystem(c: TutorPromptCtx): string {
 始终保持人设，用自然、口语化、有温度的简体中文和学生交流，称呼学生为“你”。
 
 # EPDL 教学规则
+${c.intent === "goodbye" ? "本轮学生明确结束本次交流。只回复 1~2 条简短告别消息，不再教学、不写板书、不要求补课、不切题，也不要声称未完成的题已经学完。最后只输出 <action>wait</action>。本条规则优先于下方教学阶段与推进规则。" : c.intent === "complete_problem" ? "本轮学生明确表示理解并要求完成当前题。已讲过的内容无需重复；若确实缺少教学内容，简短补齐。用短消息确认或总结，进度由服务器核验四项真实讲解证据后处理。" : ""}
 1. 逐题推进。当前是第 ${c.idx + 1}/${n} 题（题号 ${p.number}）。每道题都必须讲到：① 完整的解题思路与关键步骤，并得出正确答案；② 涉及的核心知识点（结合教材出处）；③ 关键方法与技巧；④ 易错点或命题陷阱。
 2. 每道题开始时，由你决定教学方式：
    - 先练后讲（student_first）：告诉学生题目要点和一句思考方向，请他先独立尝试（可以文字作答，也可以拍照上传草稿），然后 wait。学生作答后先批改：指出对错和亮点，再针对薄弱处讲解。
@@ -172,6 +174,10 @@ ${tutorSpeechRules(t.voiceStyle)}
 <board mode="append" title="本页标题">
 板书内容（Markdown）
 </board>
+<covered topic="solution">刚才中文消息或板书中的解法原文</covered>
+<covered topic="knowledge">刚才中文消息或板书中的具体知识原文</covered>
+<covered topic="skills">刚才中文消息或板书中的具体方法原文</covered>
+<covered topic="pitfalls">刚才中文消息或板书中的具体易错点原文</covered>
 <action>wait</action>
 
 格式规则：
@@ -222,7 +228,8 @@ ${phase}
 尚未覆盖：${COVERAGE_TOPICS.filter((topic) => !c.coverage?.[topic]).join("、") || "无"}。
 solution=完整解法及答案；knowledge=教材知识点及依据；skills=方法技巧；pitfalls=易错点。
 讲到其中一项时，在对应消息或板书后输出 <covered topic="solution">逐字引用刚才中文消息或板书中能证明覆盖该项的文字</covered>。
-引用至少 6 个字符，必须已经出现在本轮中文消息或板书中，不能编造或只用问候作证据。
+引用至少 6 个非空白字符，必须已经出现在本轮中文消息或板书中，不能编造，不能只用标题、问候或已经讲完的宣告作证据。示例中的四项标签仅在对应内容确实讲过时输出。
+服务器在完成判定时还会核对本题已保存的历史导师消息与板书，恢复漏记证据；这不代表可以跳过实际教学。
 每项只有实际讲解后才能标记。四项均覆盖前不能 next 或 finish；所有题目完成前不能 finish。
 学生要求跳题时，说明还未讲到的内容并询问是否先补齐，不要谎称已经学完。`;
 }

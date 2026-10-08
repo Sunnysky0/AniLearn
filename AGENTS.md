@@ -80,7 +80,7 @@ API (all `force-dynamic`):
 | `PATCH/DELETE /api/papers/:id` | Edit/delete under the paper lock. Subject cannot change after publication or while a draft exists. |
 | `POST /api/sessions` | Start classroom (`paperId` + `tutorId`). Requires complete, error-free `ready` paper; saves snapshot in a transaction. |
 | `PATCH/DELETE /api/sessions/:id` | Jump/delete under the session lock; active generation returns `409`. |
-| `POST /api/sessions/:id/turn` | Tutor turn. Body `{ text?, images? }`. Streams `TurnEvent` NDJSON. |
+| `POST /api/sessions/:id/turn` | Tutor turn. Body `{ text?, images?, intent?: "complete_problem" \| "goodbye", problemIdx? }`. Streams `TurnEvent` NDJSON; successful `done` echoes the optional intent. Exact shortcut text also resolves the intent. `problemIdx` binds completion and retries to the intended problem; already-done targets only synchronize progress. |
 | `POST /api/tts` | Fish Audio mp3. Body `{ text, voiceId }`. In-memory cache by model+voice+text. |
 | `GET /api/voices` | Fish Audio voice search (default `lang=ja`). |
 | `GET/PUT /api/settings` | Provider keys, models, Fish key, `autoContinue`. Keys never returned in full. |
@@ -101,7 +101,7 @@ Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullab
 - Analysis continues when its browser stream disconnects. A process restart stops the task, but preserves completed draft work. The student must click to resume; there is no durable job worker or automatic restart.
 - `tryOperationLock` must reserve a connection from the separate lock pool, never the database work pool. Release on success, failure, cancellation, and pre-stream errors. Keep paper/session lock namespaces consistent across app processes.
 - Serialize session generation, jumps, and deletion. A `409` means another operation owns the lock. Client retries must be bounded; do not remove server locks to make an interrupted request succeed.
-- Only accept coverage quotes of at least six non-whitespace characters that appear in actual Chinese messages or board content emitted in the current turn. Persist coverage by problem index.
+- Only accept coverage quotes of at least six non-whitespace characters that appear in actual tutor Chinese messages or board content. Normal tags reference the current turn; completion may make one bounded repair call using saved teaching from this session and problem, never student input, other problems, or reference solutions. Reject headings and completion declarations as evidence. Persist coverage by problem index.
 - When coverage is incomplete, convert `next`/`finish` to `wait`. When finishing a covered problem, visit any unfinished problems, including ones skipped earlier. Only complete the session when every problem is done.
 - OpenAI/xAI requests must send the requested output budget (`max_completion_tokens` for OpenAI gpt-5/o-series, otherwise `max_tokens`). All adapters must reject truncation, safety stops, and premature stream termination.
 
@@ -127,7 +127,8 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 
 - `<msg>` and `<board>` may interleave. Exactly one `<action>` at the end.
 - `wait` = wait for the student. `continue` = client auto-fires another turn (cap 6). `next` / `finish` update session progress.
-- `next` / `finish` require all four coverage topics, backed by actual emitted content. Finish cannot skip unfinished problems. Coverage is a progress guard, not independent semantic verification.
+- `next` / `finish` and explicit `complete_problem` require all four coverage topics, backed by actual emitted or saved tutor content. Complete coverage alone does not finish a problem. Finish cannot skip unfinished problems. Coverage is a progress guard, not independent semantic verification.
+- `goodbye` preserves progress and suppresses board work, completion and automatic continuation. The return-home control unlocks only after a successful done, normal stream EOF, and the entire playback/reveal queue is idle; cancellation or failure must not unlock it. Goodbye state is page-local; retry retains intent.
 - Sessions keep a paper/problem snapshot. Paper and session mutations use separate PostgreSQL advisory-lock connections, including across app processes.
 - PDF, upload UI and server share `MAX_PAPER_PAGES = 12`; oversized PDFs are rejected explicitly.
 - Client pump (`Classroom.tsx`): play each `message` (TTS + reveal), then apply `board` / `problem` / `done`. User may interrupt; pending input flushes the queue.

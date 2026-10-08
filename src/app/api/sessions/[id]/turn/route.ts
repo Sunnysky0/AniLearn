@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { boards, messages, paperPages, sessions } from "@/db/schema";
 import {
@@ -14,8 +14,8 @@ import { buildTutorMessages, buildTutorSystem, normalizeAction } from "@/lib/ser
 import { createTagParser, innerTag, stripTags, type TagBlock } from "@/lib/server/protocol";
 import { getLLMConfig, getSettings } from "@/lib/server/settings";
 import { tryOperationLock } from "@/lib/server/locks";
-import { acceptCoverage, prepareTutorMessages } from "@/lib/server/tutor-output";
-import { COVERAGE_TOPICS, type TeachingCoverage } from "@/lib/types";
+import { acceptCoverage, COVERAGE_LABELS, prepareTutorMessages, recoverCoverage } from "@/lib/server/tutor-output";
+import { COVERAGE_TOPICS, turnIntentForText, type TeachingCoverage, type TurnIntent, type TurnRequest } from "@/lib/types";
 import type { BoardBlock, ProblemProgress, TurnAction, TurnEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -39,7 +39,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 }
 
 async function runTurn(req: Request, sessionId: number, release: () => Promise<void>) {
-  const body = (await req.json().catch(() => ({}))) as { text?: string; images?: string[] };
+  const input = await req.json().catch(() => null);
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return Response.json({ error: "讲解请求必须为 JSON 对象。" }, { status: 400 });
+  }
+  const body = input as TurnRequest;
+  if (body.intent !== undefined && body.intent !== "complete_problem" && body.intent !== "goodbye") {
+    return Response.json({ error: "无效的课堂意图。" }, { status: 400 });
+  }
   const bundle = await loadClassroom(sessionId);
   if (!bundle) { await release(); return Response.json({ error: "课堂不存在" }, { status: 404 }); }
   const { session, tutor, paper, problems } = bundle;
@@ -55,7 +62,21 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
 
   const idx = Math.min(Math.max(session.currentIdx, 0), problems.length - 1);
   const problem = problems[idx];
-  const text = (body.text ?? "").trim().slice(0, 4000);
+  const text = (typeof body.text === "string" ? body.text : "").trim().slice(0, 4000);
+  const intent: TurnIntent | undefined = body.intent === "goodbye" || body.intent === "complete_problem"
+    ? body.intent
+    : turnIntentForText(text);
+  if (body.problemIdx !== undefined && (!Number.isInteger(body.problemIdx) || body.problemIdx < 0 || body.problemIdx >= problems.length)) {
+    return Response.json({ error: "题号无效。" }, { status: 400 });
+  }
+  if (intent === "complete_problem" && body.problemIdx !== undefined && session.progress?.[String(body.problemIdx)] === "done") {
+    await release();
+    const event: TurnEvent = { type: "done", action: session.status === "completed" ? "finish" : "wait", session: toSessionDTO(session), intent };
+    return new Response(JSON.stringify(event) + "\n", { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" } });
+  }
+  if (intent === "complete_problem" && body.problemIdx !== undefined && body.problemIdx !== idx) {
+    return Response.json({ error: "题目已切换，请确认当前题后再继续。" }, { status: 400 });
+  }
   const images = Array.isArray(body.images)
     ? body.images.filter((x) => typeof x === "string" && x.startsWith("data:image/")).slice(0, 4)
     : [];
@@ -82,7 +103,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
       .select()
       .from(paperPages)
       .where(and(eq(paperPages.paperId, paper.id), eq(paperPages.pageIndex, Math.max(0, problem.page - 1))));
-    if (pg) pageImage = { mime: pg.mime, data: pg.data };
+    if (pg?.mime.startsWith("image/")) pageImage = { mime: pg.mime, data: pg.data };
   }
 
   const state = {
@@ -105,6 +126,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
     progress: session.progress ?? {},
     history,
     coverage: state.coverage,
+    intent,
   });
   const llmMessages = buildTutorMessages({ history, pageImage, problemNumber: problem.number });
 
@@ -143,6 +165,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
         for (const b of list) {
           if (upstream.signal.aborted) return;
           if (!b.closed) throw new Error("导师输出未完成，请重试。");
+          if (state.actions) throw new Error("导师课程动作必须放在回复末尾，请重试。");
           if (b.tag === "msg") {
             let zh = innerTag(b.body, "zh") ?? stripTags(b.body);
             zh = zh.split(/<ja[\s>]/i)[0].trim();
@@ -155,6 +178,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
               }
             }
           } else if (b.tag === "board") {
+            if (intent === "goodbye") continue;
             let md = b.body.trim();
             if (hasJapaneseText(md) || hasJapaneseText(b.attrs.title || "")) {
               const raw = await complete(cfg, {
@@ -208,10 +232,12 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
               message: toMessageDTO(row),
             });
           } else if (b.tag === "covered") {
-            acceptCoverage(state.coverage, b.attrs.topic || "", b.body.trim(), state.taught);
+            if (intent !== "goodbye") acceptCoverage(state.coverage, b.attrs.topic || "", b.body.trim(), state.taught);
           } else if (b.tag === "action") {
             state.actions++;
-            state.action = normalizeAction(b.body || b.attrs.type || b.attrs.value);
+            const action = (b.body || b.attrs.type || b.attrs.value || "").trim().toLowerCase();
+            if (!/^(wait|continue|next|finish)$/.test(action)) throw new Error("导师课程动作无效，请重试。");
+            state.action = normalizeAction(action);
           }
         }
       };
@@ -237,15 +263,37 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
         }
         if (upstream.signal.aborted) throw upstream.signal.reason;
         if (state.actions > 1) throw new Error("导师返回了多个课程动作，请重试。");
+        if (intent && state.actions !== 1) throw new Error("导师输出未完成，请重试。");
 
         let finalAction: TurnAction = state.action ?? "wait";
-        const coverage = { ...(session.coverage ?? {}), [String(idx)]: state.coverage };
-        if ((finalAction === "next" || finalAction === "finish") && !COVERAGE_TOPICS.every((topic) => state.coverage[topic])) {
+        if (intent === "goodbye") {
           finalAction = "wait";
-          await insertTutorMessage("这题的讲解还没有完整覆盖。我们先补齐解法、知识点、方法和易错点，再继续。", "この問題の解説を最後まで確認してから、次へ進みましょう。");
         }
+        const completing = intent !== "goodbye" && (intent === "complete_problem" || finalAction === "next" || finalAction === "finish");
+        if ((intent || completing) && parser.stray().trim()) throw new Error("导师回复格式不完整，请重试。");
+        if (completing && !COVERAGE_TOPICS.every((topic) => state.coverage[topic])) {
+          const savedTeaching = await db
+            .select({ content: messages.content })
+            .from(messages)
+            .where(and(eq(messages.sessionId, sessionId), eq(messages.problemIdx, idx), eq(messages.role, "tutor"), inArray(messages.kind, ["text", "board"])))
+            .orderBy(asc(messages.id));
+          const recovered = await recoverCoverage(
+            cfg,
+            state.coverage,
+            [...savedTeaching.map((row) => row.content), ...state.blocks.map((block) => block.md), ...state.taught],
+            upstream.signal,
+          );
+          Object.assign(state.coverage, recovered);
+        }
+        const coverage = { ...(session.coverage ?? {}), [String(idx)]: state.coverage };
+        const missing = COVERAGE_TOPICS.filter((topic) => !state.coverage[topic]);
+        if (completing && missing.length) {
+          finalAction = "wait";
+          await insertTutorMessage(`这题还缺少${missing.map((topic) => COVERAGE_LABELS[topic]).join("、")}的有效讲解记录。我们先补齐，再继续。`, "この問題の解説を最後まで確認してから、次へ進みましょう。");
+        }
+        upstream.signal.throwIfAborted();
         let updated: SessionRow = session;
-        if (finalAction === "next" || finalAction === "finish") {
+        if (completing && !missing.length) {
           const progress: Record<string, ProblemProgress> = { ...(session.progress ?? {}), [String(idx)]: "done" };
           const remaining = problems.map((_, i) => i).filter((i) => progress[String(i)] !== "done");
           if (remaining.length) {
@@ -277,7 +325,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
             .where(eq(sessions.id, sessionId))
             .returning();
         }
-        send({ type: "done", action: finalAction, session: toSessionDTO(updated) });
+        send({ type: "done", action: finalAction, session: toSessionDTO(updated), intent });
       } catch (e) {
         if (!req.signal.aborted) {
           send({ type: "error", error: e instanceof Error ? e.message : String(e) });

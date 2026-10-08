@@ -4,6 +4,19 @@ export type ProviderId = "openai" | "anthropic" | "xai" | "gemini";
 export type PaperStatus = "uploaded" | "analyzing" | "ready" | "failed";
 export type ProblemProgress = "pending" | "active" | "done";
 export type TurnAction = "wait" | "continue" | "next" | "finish";
+export type TurnIntent = "complete_problem" | "goodbye";
+export interface TurnRequest {
+  text?: string;
+  images?: string[];
+  intent?: TurnIntent;
+  problemIdx?: number;
+}
+export const COMPLETE_PROBLEM_TEXT = "我懂了，下一题";
+export const GOODBYE_TEXT = "就到这里吧，再见";
+export function turnIntentForText(text: string): TurnIntent | undefined {
+  if (text.trim() === COMPLETE_PROBLEM_TEXT) return "complete_problem";
+  if (text.trim() === GOODBYE_TEXT) return "goodbye";
+}
 export const MAX_PAPER_PAGES = 12;
 export const MAX_PAPER_TEXT_BYTES = 1_500_000;
 export const COVERAGE_TOPICS = ["solution", "knowledge", "skills", "pitfalls"] as const;
@@ -247,7 +260,7 @@ export type TurnEvent =
   | { type: "message"; message: MessageDTO }
   | { type: "board"; board: BoardDTO; blockId: string; message: MessageDTO }
   | { type: "problem"; message: MessageDTO; session: SessionDTO }
-  | { type: "done"; action: TurnAction; session: SessionDTO }
+  | { type: "done"; action: TurnAction; session: SessionDTO; intent?: TurnIntent }
   | { type: "error"; error: string };
 
 export type AnalysisEvent =

@@ -57,12 +57,19 @@ async function init() {
       if (req.url === '/shutdown') { json(res, { ok: true }); setImmediate(cleanup); return; }
       if (req.url === '/fixture') return json(res, { normal });
       if (req.method !== 'POST') return json(res, { error: 'not found' }, 404);
-      const body = await readJson(req);
+      let body = await readJson(req);
       if (req.url === '/sql') {
         const result = await pool.query(body.sql, body.params || []);
         return json(res, result.rows);
       }
-      if (req.url !== '/v1/chat/completions') return json(res, { error: 'not found' }, 404);
+      const gemini = /^\/v1beta\/models\/.+:streamGenerateContent\?alt=sse$/.test(req.url);
+      if (req.url !== '/v1/chat/completions' && !gemini) return json(res, { error: 'not found' }, 404);
+      if (gemini) body = {
+        model: decodeURIComponent(req.url.match(/\/models\/(.+):stream/)[1]),
+        max_tokens: body.generationConfig.maxOutputTokens,
+        messages: [{ role: 'system', content: body.systemInstruction.parts.map(p => p.text).join('\n') },
+          ...body.contents.map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.parts.map(p => p.text ? { type: 'text', text: p.text } : { type: 'image' }) }))],
+      };
       requests.push({ model: body.model, max_tokens: body.max_tokens ?? null, max_completion_tokens: body.max_completion_tokens ?? null, messages: body.messages?.map(m => ({ role: m.role, content: safeParts(m.content) })) });
       const system = body.messages[0].content;
       const input = body.messages.at(-1).content;
@@ -73,6 +80,17 @@ async function init() {
         if (body.model === 'audit-repair-fail') return json(res, { error: { message: 'Simulated repair failure' } }, 503);
         const chunks = [...inputText.matchAll(/<zh>([\s\S]*?)<\/zh>/g)].map(m => m[1]);
         output = chunks.map(chunk => msg(body.model === 'audit-language' ? '这是修复后的中文消息。' : chunk)).join('');
+      } else if (system.includes('[COVERAGE_REPAIR]')) {
+        if (body.model === 'audit-coverage-error') return json(res, { error: { message: 'Simulated coverage failure' } }, 503);
+        output = ['audit-forged', 'audit-coverage-forged'].includes(body.model) ? coverage :
+          [...coverage.matchAll(/<covered topic="([^"]+)">([^<]+)<\/covered>/g)]
+            .filter(match => inputText.includes(match[2])).map(match => match[0]).join('');
+        for (const quote of ['核心知识点与方法总结', '这一题已经完整讲解。']) {
+          if (inputText.includes(quote)) output = ['solution', 'knowledge', 'skills', 'pitfalls'].map(topic => `<covered topic="${topic}">${quote}</covered>`).join('');
+        }
+        if (body.model === 'audit-coverage-truncated') { output = coverage; ending = 'length'; }
+        if (body.model === 'audit-coverage-open') output = '<covered topic="knowledge">人教A版必修第一册：等式两边同减同加。';
+        if (body.model === 'audit-coverage-stray') output = coverage + '<action>finish</action>';
       } else if (system.includes('[BOARD_REPAIR]')) {
         output = '<board title="中文标题">## 中文知识点\n这是翻译后的中文板书。</board>';
       } else if (system.includes('<inventory')) {
@@ -90,6 +108,16 @@ async function init() {
         if (body.model === 'audit-wrong-number') output = output.replace(`number="${n}"`, 'number="99"');
       }
       else if (body.model === 'audit-finish') output = msg('这一题讲完了。') + '<action>finish</action>';
+      else if (body.model === 'audit-coverage-missing') output = msg('请确认是否进入下一题。') + coverageBoard + '<action>wait</action>';
+      else if (body.model.startsWith('audit-coverage-')) output = msg('请确认是否进入下一题。') + '<action>wait</action>';
+      else if (body.model.startsWith('audit-goodbye')) {
+        output = msg('好，今天先到这里。下次我们接着学。', '[calm] 今日はここまでにしましょう。また一緒に勉強しましょう。') +
+          (body.model === 'audit-goodbye-next' ? coverageBoard + coverage + '<action>next</action>' : '<action>wait</action>');
+        if (body.model === 'audit-goodbye-error') ending = 'error';
+        if (body.model === 'audit-goodbye-truncated') ending = 'length';
+        if (body.model === 'audit-goodbye-noaction') output = msg('好，下次见。');
+        if (body.model === 'audit-goodbye-badaction') output = msg('好，下次见。') + '<action>unknown</action>';
+      }
       else if (['audit-long', 'audit-repair-fail'].includes(body.model)) output = msg('这里解释方程式的移项原理。'.repeat(45)) + '<action>wait</action>';
       else if (body.model === 'audit-fallback') output = '这里解释方程式的移项原理。'.repeat(45);
       else if (body.model === 'audit-teach') output = msg('先试着解 $x+1=2$。') + board + msg('**两边减去 1**，就得到 $x=1$。') + '<action>wait</action>';
@@ -114,12 +142,13 @@ async function init() {
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       for (let i = 0; i < output.length; i += 37) {
-        res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: output.slice(i, i + 37) } }] }) + '\n\n');
+        const delta = output.slice(i, i + 37);
+        res.write('data: ' + JSON.stringify(gemini ? { candidates: [{ content: { parts: [{ text: delta }] } }] } : { choices: [{ delta: { content: delta } }] }) + '\n\n');
         await new Promise(resolve => setTimeout(resolve, body.model === 'audit-slow' ? 100 : 3));
       }
       if (ending === 'error') res.write('data: ' + JSON.stringify({ error: { message: 'Audit simulated upstream interruption' } }) + '\n\n');
-      else res.write('data: ' + JSON.stringify({ choices: [{ delta: {}, finish_reason: ending }] }) + '\n\n');
-      res.end('data: [DONE]\n\n');
+      else res.write('data: ' + JSON.stringify(gemini ? { candidates: [{ finishReason: ending === 'length' ? 'MAX_TOKENS' : 'STOP' }] } : { choices: [{ delta: {}, finish_reason: ending }] }) + '\n\n');
+      res.end(gemini ? '' : 'data: [DONE]\n\n');
     } catch (e) { json(res, { error: e.message }, 500); }
   });
   await new Promise(resolve => mock.listen(4107, '127.0.0.1', resolve));

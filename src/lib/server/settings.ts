@@ -7,6 +7,7 @@ import {
   type ProviderId,
   type PublicSettings,
   type SettingsData,
+  type ProviderConnection,
 } from "@/lib/types";
 import type { LLMConfig } from "./llm";
 import { fishProxyPreview } from "./fish";
@@ -37,6 +38,11 @@ export function defaultSettings(): SettingsData {
   }
   const withEnv = PROVIDERS.find((p) => envFirst(p.envKeys));
   return {
+    connections: PROVIDERS.map((p) => ({ id: p.id, name: p.name, protocol: p.id, baseUrl: "", apiKey: "", envProvider: p.id })),
+    models: {
+      chat: { connectionId: withEnv?.id ?? "openai", model: providers[withEnv?.id ?? "openai"].chatModel },
+      analysis: { connectionId: withEnv?.id ?? "openai", model: providers[withEnv?.id ?? "openai"].analysisModel },
+    },
     provider: withEnv?.id ?? "openai",
     providers,
     fish: { apiKey: "", model: "s2.1-pro", enabled: true, proxyUrl: "" },
@@ -56,6 +62,14 @@ export async function getSettings(): Promise<SettingsData> {
   const provider =
     d.provider && PROVIDERS.some((p) => p.id === d.provider) ? d.provider : def.provider;
   return {
+    connections: d.connections ?? PROVIDERS.map((p) => ({
+      id: p.id, name: p.name, protocol: p.id, baseUrl: providers[p.id].baseUrl,
+      apiKey: providers[p.id].apiKey, envProvider: p.id,
+    })),
+    models: d.models ?? {
+      chat: { connectionId: provider, model: providers[provider].chatModel },
+      analysis: { connectionId: provider, model: providers[provider].analysisModel },
+    },
     provider,
     providers,
     fish: { ...def.fish, ...(d.fish ?? {}) },
@@ -95,6 +109,16 @@ function mask(k: string) {
   return `${k.slice(0, 4)}••••••${k.slice(-4)}`;
 }
 
+export function resolveConnectionKey(c: ProviderConnection): { key: string; source: KeySource } {
+  if (c.apiKey.trim()) return { key: c.apiKey.trim(), source: "db" };
+  const key = c.envProvider ? envFirst(providerMeta(c.envProvider).envKeys) : "";
+  return { key, source: key ? "env" : "none" };
+}
+export function isLLMReady(s: SettingsData, purpose: "chat" | "analysis") {
+  const c = s.connections.find((connection) => connection.id === s.models[purpose].connectionId);
+  return !!c && !!resolveConnectionKey(c).key;
+}
+
 export function toPublicSettings(s: SettingsData): PublicSettings {
   const providers = {} as PublicSettings["providers"];
   for (const p of PROVIDERS) {
@@ -111,6 +135,13 @@ export function toPublicSettings(s: SettingsData): PublicSettings {
   }
   const fish = resolveFishKey(s);
   return {
+    connections: s.connections.map((c) => {
+      const { apiKey: _key, ...publicConnection } = c;
+      void _key;
+      const { key, source } = resolveConnectionKey(c);
+      return { ...publicConnection, hasKey: !!key, keySource: source, keyPreview: mask(key) };
+    }),
+    models: s.models,
     provider: s.provider,
     providers,
     fish: {
@@ -127,17 +158,18 @@ export function toPublicSettings(s: SettingsData): PublicSettings {
 }
 
 export function getLLMConfig(s: SettingsData, purpose: "chat" | "analysis"): LLMConfig {
-  const id = s.provider;
+  const binding = s.models[purpose];
+  const connection = s.connections.find((c) => c.id === binding.connectionId);
+  if (!connection) throw new Error("模型绑定的服务商连接不存在，请检查设置。");
+  const id = connection.protocol === "openai-compatible" ? "openai" : connection.protocol;
   const meta = providerMeta(id);
-  const { key } = resolveProviderKey(s, id);
+  const { key } = resolveConnectionKey(connection);
   if (!key) {
     throw new Error(`尚未配置 ${meta.name} 的 API Key，请先前往「设置」页面填写（或切换到已配置的模型服务商）。`);
   }
-  const ps = s.providers[id];
-  const model =
-    (purpose === "chat" ? ps.chatModel : ps.analysisModel).trim() ||
+  const model = binding.model.trim() ||
     (purpose === "chat" ? meta.defaultChatModel : meta.defaultAnalysisModel);
-  return { provider: id, apiKey: key, baseUrl: ps.baseUrl.trim() || undefined, model };
+  return { provider: id, apiKey: key, baseUrl: connection.baseUrl.trim() || undefined, model };
 }
 
 export function isTTSReady(s: SettingsData) {

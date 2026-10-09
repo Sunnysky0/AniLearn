@@ -1,6 +1,34 @@
 // Shared types used by both server and client code.
 
 export type ProviderId = "openai" | "anthropic" | "xai" | "gemini";
+export type ConnectionProtocol = ProviderId | "openai-compatible";
+export interface ProviderConnection {
+  id: string;
+  name: string;
+  protocol: ConnectionProtocol;
+  baseUrl: string;
+  apiKey: string;
+  envProvider?: ProviderId;
+}
+export interface ModelBinding { connectionId: string; model: string }
+export type PublicConnection = Omit<ProviderConnection, "apiKey"> & {
+  hasKey: boolean; keySource: KeySource; keyPreview: string;
+};
+export const PACES = [
+  { id: "thorough", name: "条分缕析", description: "逐题完整讲解" },
+  { id: "focused", name: "纲举目张", description: "全部重点，代表题去重" },
+  { id: "essential", name: "由博返约", description: "核心主线与关键突破" },
+  { id: "challenge", name: "游刃有余", description: "难题、陷阱与个人错题" },
+  { id: "advanced", name: "羽登化境", description: "推广、迁移与拓展变式" },
+] as const;
+export type TeachingPace = (typeof PACES)[number]["id"];
+export const DEFAULT_PACE: TeachingPace = "focused";
+export function isTeachingPace(value: unknown): value is TeachingPace {
+  return PACES.some((pace) => pace.id === value);
+}
+export interface LearningGoal { id: string; topic: CoverageTopic; description: string }
+export interface LearningUnit { idx: number; related: number[]; reason: string; goals: LearningGoal[] }
+export interface LearningPlan { version: number; pace: TeachingPace; request: string; units: LearningUnit[] }
 export type PaperStatus = "uploaded" | "analyzing" | "ready" | "failed";
 export type ProblemProgress = "pending" | "active" | "done";
 export type TurnAction = "wait" | "continue" | "next" | "finish";
@@ -10,6 +38,7 @@ export interface TurnRequest {
   images?: string[];
   intent?: TurnIntent;
   problemIdx?: number;
+  planVersion?: number;
 }
 export const COMPLETE_PROBLEM_TEXT = "我懂了，下一题";
 export const GOODBYE_TEXT = "就到这里吧，再见";
@@ -19,9 +48,10 @@ export function turnIntentForText(text: string): TurnIntent | undefined {
 }
 export const MAX_PAPER_PAGES = 12;
 export const MAX_PAPER_TEXT_BYTES = 1_500_000;
-export const COVERAGE_TOPICS = ["solution", "knowledge", "skills", "pitfalls"] as const;
+export const CORE_COVERAGE_TOPICS = ["solution", "knowledge", "skills", "pitfalls"] as const;
+export const COVERAGE_TOPICS = [...CORE_COVERAGE_TOPICS, "extension", "practice"] as const;
 export type CoverageTopic = (typeof COVERAGE_TOPICS)[number];
-export type TeachingCoverage = Partial<Record<CoverageTopic, string>>;
+export type TeachingCoverage = Record<string, string>;
 
 export interface KnowledgePoint {
   name: string;
@@ -43,6 +73,8 @@ export interface ProviderSettings {
 }
 
 export interface SettingsData {
+  connections: ProviderConnection[];
+  models: { chat: ModelBinding; analysis: ModelBinding };
   provider: ProviderId;
   providers: Record<ProviderId, ProviderSettings>;
   fish: { apiKey: string; model: string; enabled: boolean; proxyUrl: string };
@@ -61,6 +93,8 @@ export interface PublicProviderSettings {
 }
 
 export interface PublicSettings {
+  connections: PublicConnection[];
+  models: SettingsData["models"];
   provider: ProviderId;
   providers: Record<ProviderId, PublicProviderSettings>;
   fish: {
@@ -163,7 +197,6 @@ export interface TutorDTO {
   id: number;
   name: string;
   avatar: string;
-  subject: string;
   tags: string[];
   tagline: string;
   personality: string;
@@ -189,6 +222,11 @@ export interface PaperDTO {
   /** MIME types in page order, when the caller has loaded page metadata. */
   pageMimes?: string[];
   createdAt: string;
+  pace?: TeachingPace;
+  learningRequest?: string;
+  inventory?: PaperInventory | null;
+  analysisPlan?: LearningPlan | null;
+  revision?: number;
 }
 
 export interface ProblemDTO {
@@ -208,23 +246,35 @@ export interface ProblemDTO {
   strategyReason: string;
   studentWork: string;
   page: number;
+  analysis?: "ready" | "unparsed";
 }
+
+export interface ProblemDirectoryItem {
+  idx: number; number: string; page: number; endPage: number; content: string;
+  title?: string; difficulty?: number; topics?: string[]; methods?: string[];
+  traps?: string[]; studentWork?: string; core?: boolean;
+}
+export interface DirectoryProblemDTO { item: ProblemDirectoryItem; analysis: ProblemDTO | null }
 
 export interface PaperInventory {
   title: string;
   overview: string;
-  items: { number: string; page: number; endPage: number; content: string }[];
+  items: ProblemDirectoryItem[];
 }
 
 export type AnalyzedProblem = Omit<ProblemDTO, "id" | "idx">;
 export interface AnalysisDraft {
   inventory: PaperInventory | null;
   completed: AnalyzedProblem[];
+  indexed?: Record<string, AnalyzedProblem>;
+  plan?: LearningPlan;
+  revision?: number;
 }
 
 export interface ClassroomSnapshot {
   paper: PaperDTO;
   problems: ProblemDTO[];
+  inventory?: PaperInventory | null;
 }
 
 export interface SessionDTO {
@@ -236,6 +286,8 @@ export interface SessionDTO {
   progress: Record<string, ProblemProgress>;
   createdAt: string;
   updatedAt: string;
+  plan?: LearningPlan | null;
+  pendingPlan?: LearningPlan | null;
 }
 
 export interface MessageDTO {
@@ -256,6 +308,7 @@ export interface BoardDTO {
 }
 
 export type TurnEvent =
+  | { type: "plan"; session: SessionDTO }
   | { type: "user"; message: MessageDTO }
   | { type: "message"; message: MessageDTO }
   | { type: "board"; board: BoardDTO; blockId: string; message: MessageDTO }
@@ -264,11 +317,35 @@ export type TurnEvent =
   | { type: "error"; error: string };
 
 export type AnalysisEvent =
+  | { type: "inventory"; inventory: PaperInventory; plan: LearningPlan }
   | { type: "status"; status: PaperStatus }
   | { type: "paper"; paper: PaperDTO }
   | { type: "problem"; problem: ProblemDTO }
   | { type: "progress"; chars: number }
   | { type: "done"; paper: PaperDTO }
+  | { type: "error"; error: string };
+
+export type ReadingLanguage = "en" | "ja";
+export interface ReadingParagraph { id: string; text: string; page: number }
+export interface ReadingDTO {
+  id: number; title: string; language: ReadingLanguage; status: string;
+  paragraphs: ReadingParagraph[]; extracted: string; overview: string;
+  error: string | null; revision: number; createdAt: string; pageCount: number;
+}
+export interface ReadingMessage {
+  id: number; role: "user" | "tutor"; content: string; speech: string;
+  paragraphIdx: number; kind: "text" | "quote" | "example" | "exercise" | "feedback";
+  language: "zh-CN" | ReadingLanguage;
+}
+export interface ReadingSessionDTO {
+  id: number; readingId: number; tutorId: number; currentIdx: number;
+  status: string; progress: Record<string, ProblemProgress>;
+  notes: Record<string, string[]>; updatedAt: string;
+}
+export type ReadingTurnEvent =
+  | { type: "message"; message: ReadingMessage }
+  | { type: "notes"; paragraphIdx: number; notes: string[] }
+  | { type: "done"; session: ReadingSessionDTO; action: TurnAction; goodbye?: boolean }
   | { type: "error"; error: string };
 
 export interface VoiceItem {

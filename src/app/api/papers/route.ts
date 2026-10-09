@@ -2,7 +2,7 @@ import { desc, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { papers, problems } from "@/db/schema";
 import { paperPageMimes, toPaperDTO } from "@/lib/server/data";
-import { SUBJECTS } from "@/lib/types";
+import { SUBJECTS, isTeachingPace, DEFAULT_PACE } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -19,11 +19,11 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as { title?: string; subject?: string };
+  const body = (await req.json().catch(() => ({}))) as { title?: string; subject?: string; pace?: string; request?: string };
   const now = new Date();
   const fallback = `未命名试卷 ${now.getMonth() + 1}-${now.getDate()} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const title = (body.title ?? "").trim().slice(0, 100) || fallback;
   const subject = SUBJECTS.includes(body.subject ?? "") ? (body.subject as string) : "数学";
-  const [row] = await db.insert(papers).values({ title, subject, status: "uploaded" }).returning();
+  const [row] = await db.insert(papers).values({ title, subject, pace: isTeachingPace(body.pace) ? body.pace : DEFAULT_PACE, learningRequest: typeof body.request === "string" ? body.request.trim().slice(0, 2000) : "", status: "uploaded" }).returning();
   return Response.json(toPaperDTO(row));
 }

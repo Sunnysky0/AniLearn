@@ -13,7 +13,7 @@ import {
   toSessionDTO,
   toTutorDTO,
 } from "@/lib/server/data";
-import { getSettings, isTTSReady, resolveProviderKey } from "@/lib/server/settings";
+import { getSettings, isTTSReady, isLLMReady } from "@/lib/server/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +36,7 @@ export default async function ClassroomPage({ params }: { params: Promise<{ id: 
       initialMessages={msgs.map(toMessageDTO)}
       initialBoards={bds.map(toBoardDTO)}
       ttsAvailable={isTTSReady(settings)}
-      llmReady={!!resolveProviderKey(settings, settings.provider).key}
+      llmReady={isLLMReady(settings, "chat")}
       autoContinueDefault={settings.autoContinue}
     />
   );

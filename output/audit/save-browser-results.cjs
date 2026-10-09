@@ -3,7 +3,7 @@ const { execFileSync } = require('node:child_process');
 const cli = 'C:/Users/sunny/AppData/Local/npm-cache/_npx/31e32ef8478fbf80/node_modules/@playwright/cli/playwright-cli.js';
 const key = process.argv[2] || 'audit-results';
 const destination = process.argv[3] || 'output/audit/browser-results.json';
-const raw = execFileSync(process.execPath, [cli, '-s=anilearn-audit', 'eval', `JSON.parse(localStorage.getItem('${key}'))`], { encoding: 'utf8', windowsHide: true });
+const raw = execFileSync(process.execPath, [cli, '-s=' + (process.argv[4] || 'anilearn-audit'), 'eval', `JSON.parse(localStorage.getItem('${key}'))`], { encoding: 'utf8', windowsHide: true });
 const match = /### Result\r?\n([\s\S]*?)\r?\n### Ran/.exec(raw);
 if (!match) throw new Error('No browser results');
 const data = JSON.parse(match[1]);

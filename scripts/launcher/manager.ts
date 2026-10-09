@@ -219,7 +219,7 @@ export class Manager extends EventEmitter {
     return this.pool;
   }
   private async validateSchema() {
-    const required: Record<string, string[]> = { papers: ['analysis_draft'], sessions: ['snapshot', 'coverage'], tutors: [], messages: [], boards: [], problems: [], paper_pages: [], app_settings: [] };
+    const required: Record<string, string[]> = { papers: ['analysis_draft', 'inventory', 'analysis_plan', 'pace', 'learning_request', 'revision'], sessions: ['snapshot', 'coverage', 'plan', 'plan_revision', 'pending_plan', 'supplement_draft'], tutors: [], messages: [], boards: [], problems: [], paper_pages: [], app_settings: [], readings: ['paragraphs', 'revision'], reading_sources: [], reading_sessions: ['snapshot', 'notes'], reading_messages: [] };
     const result = await this.databasePool().query<{ table_name: string; column_name: string }>("SELECT table_name, column_name FROM information_schema.columns WHERE table_schema='public'");
     for (const [table, columns] of Object.entries(required)) if (!result.rows.some(r => r.table_name === table) || columns.some(column => !result.rows.some(r => r.table_name === table && r.column_name === column))) throw new Error('数据库表结构尚未就绪。请审查并运行 npm run db:push 后重试；启动器不会修改表结构。');
   }

@@ -8,6 +8,8 @@ import { AppHeader } from "@/components/AppHeader";
 import { fileToJpegDataUrl, fileToPaperText, pdfToImages } from "@/lib/client/media";
 import { paperTextFormat } from "@/lib/paper-source";
 import { MAX_PAPER_PAGES, SUBJECTS } from "@/lib/types";
+import { DEFAULT_PACE, type TeachingPace } from "@/lib/types";
+import PacePicker from "@/components/PacePicker";
 
 interface PageItem {
   id: string;
@@ -27,6 +29,8 @@ export default function NewPaperPage() {
   const [pages, setPages] = useState<PageItem[]>([]);
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState("数学");
+  const [pace, setPace] = useState<TeachingPace>(DEFAULT_PACE);
+  const [learningRequest, setLearningRequest] = useState("");
   const [processing, setProcessing] = useState<string | null>(null);
   const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +87,7 @@ export default function NewPaperPage() {
       const r = await fetch("/api/papers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, subject }),
+        body: JSON.stringify({ title, subject, pace, request: learningRequest }),
       });
       const paper = await r.json();
       if (!r.ok) throw new Error(paper.error || "创建试卷失败");
@@ -232,6 +236,8 @@ export default function NewPaperPage() {
           </div>
 
           <aside className="h-fit space-y-5 border-t-2 border-neutral-900 py-6 lg:sticky lg:top-24">
+            <div><label className="mb-2 block text-sm font-semibold">讲解档位</label><PacePicker value={pace} onChange={setPace} /></div>
+            <label className="block text-sm font-semibold">学习需求<textarea aria-label="学习需求" value={learningRequest} onChange={(e) => setLearningRequest(e.target.value)} maxLength={2000} className="mt-2 min-h-24 w-full border border-neutral-300 bg-white p-3 text-sm font-normal" /></label>
             <div>
               <label htmlFor="paper-title" className="text-sm font-semibold text-neutral-700">
                 试卷名称

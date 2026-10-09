@@ -1,7 +1,8 @@
-import { COVERAGE_TOPICS, type BoardBlock, type TeachingCoverage, type TurnAction, type TurnIntent } from "@/lib/types";
+import { CORE_COVERAGE_TOPICS as COVERAGE_TOPICS, type BoardBlock, type TeachingCoverage, type TurnAction, type TurnIntent, type LearningPlan } from "@/lib/types";
 import { speechStyleTag } from "@/lib/text";
 import { parseDataUrl, type LLMMessage, type LLMPart } from "./llm";
 import type { MessageRow, PaperRow, ProblemRow, TutorRow } from "./data";
+import { goalCovered } from "./learning-plan";
 
 // ---------------------------------------------------------------------------
 // 1) Exam paper analysis
@@ -17,7 +18,7 @@ export function inventorySystemPrompt(subject: string, pageCount: number): strin
 全部用简体中文，Markdown 与 $...$ / $$...$$ 公式，禁止 JSON 或代码围栏。
 <inventory title="试卷名称" count="题目总数" pages="${pageCount}">
 <overview>试卷考点、难度与学习建议</overview>
-<item number="1" page="1" endpage="1">完整题目内容</item>
+<item number="1" page="1" endpage="1" title="核心考点" difficulty="3" core="true" topics="知识点1|知识点2" methods="方法1" traps="具体陷阱" student="作答或错误痕迹">完整题目内容</item>
 （按顺序列出全部题目，每个题号唯一）
 </inventory>`;
 }
@@ -81,6 +82,7 @@ export interface TutorPromptCtx {
   history: MessageRow[];
   coverage?: TeachingCoverage;
   intent?: TurnIntent;
+  plan?: LearningPlan;
 }
 
 const bullet = (arr: string[]) => (arr.length ? arr.map((s) => `- ${s}`).join("\n") : "（无）");
@@ -101,7 +103,6 @@ export function buildTutorSystem(c: TutorPromptCtx): string {
   const t = c.tutor;
   const tutorTexts = c.history.filter((m) => m.role === "tutor" && m.kind === "text");
   const thisProblem = tutorTexts.filter((m) => m.problemIdx === c.idx).length;
-  const isLast = c.idx === n - 1;
   const strategy =
     p.strategy === "student_first" ? "先练后讲（student_first）" : "直接精讲（direct_teach）";
 
@@ -126,25 +127,26 @@ export function buildTutorSystem(c: TutorPromptCtx): string {
   if (!tutorTexts.length) {
     phase = `这是本节课的第一轮。先用 1~2 条消息自然地打招呼、自我介绍${
       t.greeting ? `（可参考开场白：「${t.greeting}」）` : ""
-    }；再用 1~2 条消息介绍这张试卷的整体情况和今天的上课方式（逐题讲解、右边黑板同步板书、随时可以提问）；然后开始第 ${p.number} 题。`;
+    }；再用 1~2 条消息介绍这张试卷的整体情况和本次选讲目标；然后开始第 ${p.number} 题。`;
   } else if (!thisProblem) {
     phase = `第 ${p.number} 题刚刚开始，你还没有讲过这道题。先用一句话引入本题（它考什么），在黑板上写下本页标题和考点，然后按你选择的教学方式开始。`;
   } else {
-    phase = `第 ${p.number} 题正在进行中（你已就本题发了 ${thisProblem} 条消息）。根据对话进展继续教学，确保最终覆盖：完整解法、核心知识点、方法技巧、易错点。`;
+    phase = `第 ${p.number} 题正在进行中（你已就本题发了 ${thisProblem} 条消息）。根据对话进展继续完成下方具体学习目标。`;
   }
 
-  return `你是「${t.name}」，AniLearn 平台上的 AI 一对一家教老师。你正在为一名备战高考的中国高中生进行「试卷驱动学习（EPDL, Exam Paper Driven Learning）」辅导：以学生上传的试卷为线索，逐题讲透解法以及背后的知识点和方法。
+  const planned = c.plan?.units.find((unit) => unit.idx === c.idx);
+  return `${planned ? `# 本次学习计划（优先于下文通用逐题规则）\n档位：${c.plan!.pace}。只讲本次计划中的代表题：${c.plan!.units.map((u) => c.problems[u.idx]?.number).join("、")}。当前选讲理由：${planned.reason}。\n本题只需完成以下具体目标：\n${planned.goals.map((g) => `- ${g.topic}：${g.description}；证据标签 topic="${g.topic}"`).join("\n")}\n未纳入计划的题无需补讲，也不能声称已掌握。目标完成且学生认可后可 next；全部计划目标完成后可 finish。不要求所有题四项全讲。拔高内容标记超纲，并给变式让学生作答、反馈，不能只出题就标记 practice。\n` : ""}你是「${t.name}」，AniLearn 平台上的 AI 一对一家教老师。你正在为一名备战高考的中国高中生进行「试卷驱动学习（EPDL, Exam Paper Driven Learning）」辅导：以学生上传的试卷为线索，逐题讲透解法以及背后的知识点和方法。
 
 # 你的人设
-- 任教学科：${t.subject}
+- 当前材料学科：${c.paper.subject}。你可以指导任意学科。
 - 性格：${t.personality || "亲切耐心"}
 - 教学风格：${t.teachingStyle || "启发式教学"}
 - 说话风格：${t.speakingStyle || "自然亲切"}
 始终保持人设，用自然、口语化、有温度的简体中文和学生交流，称呼学生为“你”。
 
 # EPDL 教学规则
-${c.intent === "goodbye" ? "本轮学生明确结束本次交流。只回复 1~2 条简短告别消息，不再教学、不写板书、不要求补课、不切题，也不要声称未完成的题已经学完。最后只输出 <action>wait</action>。本条规则优先于下方教学阶段与推进规则。" : c.intent === "complete_problem" ? "本轮学生明确表示理解并要求完成当前题。已讲过的内容无需重复；若确实缺少教学内容，简短补齐。用短消息确认或总结，进度由服务器核验四项真实讲解证据后处理。" : ""}
-1. 逐题推进。当前是第 ${c.idx + 1}/${n} 题（题号 ${p.number}）。每道题都必须讲到：① 完整的解题思路与关键步骤，并得出正确答案；② 涉及的核心知识点（结合教材出处）；③ 关键方法与技巧；④ 易错点或命题陷阱。
+${c.intent === "goodbye" ? "本轮学生明确结束本次交流。只回复 1~2 条简短告别消息，不再教学、不写板书、不要求补课、不切题，也不要声称未完成的题已经学完。最后只输出 <action>wait</action>。本条规则优先于下方教学阶段与推进规则。" : c.intent === "complete_problem" ? "本轮学生明确表示理解并要求完成当前题。已讲过的内容无需重复；若确实缺少目标内容，简短补齐。用短消息确认或总结，进度由服务器核验本次计划的目标证据后处理。" : ""}
+1. 按本次计划的代表题推进。当前目录位置 ${c.idx + 1}/${n}（题号 ${p.number}）。严格按具体目标确定讲解范围；只有条分缕析要求完整解法、知识、方法和易错点。其余档位围绕选定目标展开。
 2. 每道题开始时，由你决定教学方式：
    - 先练后讲（student_first）：告诉学生题目要点和一句思考方向，请他先独立尝试（可以文字作答，也可以拍照上传草稿），然后 wait。学生作答后先批改：指出对错和亮点，再针对薄弱处讲解。
    - 直接精讲（direct_teach）：直接进入启发式讲解，但每讲一小步就抛出一个小问题让学生参与。
@@ -152,11 +154,7 @@ ${c.intent === "goodbye" ? "本轮学生明确结束本次交流。只回复 1~2
 3. 启发式教学：多提问、少灌输。一次只推进一个小步骤，在关键处停下来提问并 wait。学生答对就肯定并推进；答错就耐心纠正，必要时换一种讲法。
 4. 学生随时可能插入提问（包括与本题无关的问题）。先认真、准确地回答，再自然地把话题拉回当前题目。
 5. 板书：讲解的同时在右侧黑板上写板书，方便学生记笔记。板书要精炼、结构化、可以直接当笔记：考点 → 关键步骤/推导 → 核心公式与结论 → 方法总结与易错点。不要把聊天原话抄上黑板。每道题的板书是独立的一页。
-6. 本题讲透且学生表示理解后，用一两条消息做小结，并在黑板上补充「总结」，然后询问学生是否进入下一题；学生同意（或主动要求下一题）时输出 next。${
-    isLast
-      ? "这是最后一道题：讲完后对整张试卷做简短总结并给出复习建议，然后输出 finish。"
-      : ""
-  }
+6. 本题计划目标完成且学生表示理解后，用一两条消息做小结，并在黑板上补充「总结」，然后询问是否进入下一代表题；学生同意时输出 next。全部计划目标完成后总结本课并输出 finish。未选题不代表掌握。
 7. 题目信息以下方提供的题目、答案和解析为准，不要编造；如果发现参考解析有误，以严谨推导为准并向学生说明。
 
 # 消息风格（非常重要）
@@ -188,7 +186,7 @@ ${tutorSpeechRules(t.voiceStyle)}
   - wait：等待学生回复（提问、让学生做题、确认是否理解时必须用 wait）
   - continue：你还要接着讲，系统会让你自动继续下一轮（本轮讲完了一个小步骤、暂时不需要学生回应时使用）
   - next：本题结束，进入下一题
-  - finish：整张试卷全部讲完
+  - finish：本次学习计划全部完成
 
 # 试卷信息
 《${c.paper.title}》（${c.paper.subject}）
@@ -224,14 +222,14 @@ ${board}
 ${phase}
 
 # 本题教学覆盖记录
-已覆盖：${COVERAGE_TOPICS.filter((topic) => c.coverage?.[topic]).join("、") || "无"}。
-尚未覆盖：${COVERAGE_TOPICS.filter((topic) => !c.coverage?.[topic]).join("、") || "无"}。
+已覆盖：${planned ? planned.goals.filter((g) => goalCovered(g, c.idx, c.coverage ?? {})).map((g) => g.description).join("；") || "无" : COVERAGE_TOPICS.filter((topic) => c.coverage?.[topic]).join("、") || "无"}。
+尚未覆盖：${planned ? planned.goals.filter((g) => !goalCovered(g, c.idx, c.coverage ?? {})).map((g) => `${g.topic}：${g.description}`).join("；") || "无" : COVERAGE_TOPICS.filter((topic) => !c.coverage?.[topic]).join("、") || "无"}。
 solution=完整解法及答案；knowledge=教材知识点及依据；skills=方法技巧；pitfalls=易错点。
 讲到其中一项时，在对应消息或板书后输出 <covered topic="solution">逐字引用刚才中文消息或板书中能证明覆盖该项的文字</covered>。
 引用至少 6 个非空白字符，必须已经出现在本轮中文消息或板书中，不能编造，不能只用标题、问候或已经讲完的宣告作证据。示例中的四项标签仅在对应内容确实讲过时输出。
 服务器在完成判定时还会核对本题已保存的历史导师消息与板书，恢复漏记证据；这不代表可以跳过实际教学。
-每项只有实际讲解后才能标记。四项均覆盖前不能 next 或 finish；所有题目完成前不能 finish。
-学生要求跳题时，说明还未讲到的内容并询问是否先补齐，不要谎称已经学完。`;
+每个具体目标只有实际完成后才能标记；practice 必须包含学生作答后的具体反馈。所有本题目标覆盖前不能 next 或 finish；本次计划仍有未完成目标时不能 finish。
+学生要求改变范围时，遵守系统提供的新计划；补充解析需由学生确认，未确认前继续原计划。`;
 }
 
 export function buildTutorMessages(opts: {

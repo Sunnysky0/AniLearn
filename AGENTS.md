@@ -8,14 +8,15 @@ Before any Next.js work, find and read the relevant doc in `node_modules/next/di
 
 # AniLearn
 
-GaoKao-oriented AI one-to-one tutor platform. A student uploads exam papers; the tutor analyzes every problem, then teaches through a streaming classroom: chat on the left, blackboard on the right, Japanese TTS in sync with Chinese text.
+AI one-to-one tutor platform for exam learning and English/Japanese article reading. Exam materials get a complete directory and plan-selected analysis, then a streaming classroom: chat on the left, blackboard on the right, Japanese TTS in sync with Chinese text.
 
 Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). Created by Claude Opus 5.5.
 
 ## Product charter
 
-- **EPDL (Exam Paper Driven Learning).** The exam paper is the syllabus. Upload images, PDF, Markdown, or LaTeX → AI extracts every problem, writes solutions, marks key points, and maps each item to textbook knowledge. Classroom instruction then walks the paper problem by problem.
-- **Custom tutors.** Personality, teaching style, speaking style, subject, avatar, greeting, and Fish Audio voice (`voiceId` + Japanese `voiceStyle` tag).
+- **EPDL (Exam Paper Driven Learning).** The paper supplies a complete stable inventory. Five paces select representative problems and concrete goals before detailed analysis. Default pace is 纲举目张; only 条分缕析 and legacy sessions require all problems and all four core topics.
+- **Readings.** Independent English/Japanese articles, original sources, reviewed paragraphs, reading sessions, notes and open dialogue exercises. Chinese explanation and labeled foreign quotes/examples are separate content types; speech remains Japanese.
+- **Custom tutors.** Personality, teaching style, speaking style, avatar, greeting, and Fish Audio voice (`voiceId` + Japanese `voiceStyle` tag). Every tutor can teach every subject; the database subject column is retained only for compatibility.
 - **Models.** OpenAI / Anthropic / Grok (xAI) / Gemini, via API. No vendor SDKs — raw `fetch` + SSE in `src/lib/server/llm.ts`.
 - **Voice.** Fish Audio TTS (`s2.1-pro`). Chat and board are Chinese; spoken audio is Japanese. Text in the chat bubble reveals in sync with playback.
 - **Short messages.** The tutor sends 2–6 short bubbles per turn (1–3 sentences each), never one long paragraph.
@@ -29,7 +30,9 @@ Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). 
 | Inventory | Model-generated directory of all problems, including their numbers, full statements, and start/end pages. Validated before detailed analysis. |
 | Analysis draft | `papers.analysisDraft`: inventory plus fully validated problems. Saved after each problem; retained on failure for resume. |
 | Problem | One extracted item. Sub-questions of a 大题 stay one problem. Strategy: `student_first` (先练后讲) or `direct_teach` (直接精讲). |
-| Tutor | Persona + voice. Default preset: 大吉岭 from Girls und Panzer (math). Other presets: 远坂凛 from Fate/stay night (physics), 晴人 (chemistry), 小樱 (English/文科). |
+| Tutor | Persona + voice, without subject binding. Presets: 大吉岭, 远坂凛, 晴人, 阿尔托莉雅. Artoria replaces 小樱 in place, preserving the tutor ID. |
+| Learning plan | Versioned pace, request and ordered representative units with related problems, reason and concrete goal IDs. Pending supplements require explicit confirmation; unselected items are not mastery. |
+| Connection | Named protocol, URL, server-side key and optional legacy environment fallback. Chat and analysis independently bind connection ID + free-form model name. |
 | Session | One classroom sitting: one paper + one tutor, with a paper/problem snapshot. Progress is per-problem `pending` \| `active` \| `done`. |
 | Coverage | Per-session, per-problem evidence for `solution`, `knowledge`, `skills`, and `pitfalls`, stored in `sessions.coverage`. |
 | Turn | One main tutor LLM call, with optional message/board repair calls. Streams NDJSON `TurnEvent`s. Ends with `wait` \| `continue` \| `next` \| `finish` on success. |
@@ -94,7 +97,7 @@ Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullab
 
 ## Analysis and classroom integrity
 
-- Publish problems only after every inventory entry passes closed-tag, matching-number/page, and required-field validation. A partial result must never emit `done` or become `ready`.
+- Publish only after the complete inventory and every plan-selected detailed problem pass validation. Inventory and nullable details remain distinct; a partial required set must never emit `done` or become `ready`. Drafts are keyed by stable index, including non-contiguous selections.
 - Each problem gets up to two analysis attempts. Save completed results outside the retry loop so a database-write failure cannot duplicate a problem.
 - Replace published problems atomically. A failed reanalysis keeps the prior published set; existing classrooms keep their original snapshot. Legacy sessions without snapshots are backfilled before replacing problems.
 - Draft problem events use provisional negative IDs. After publication, load persisted problems rather than treating provisional IDs as database IDs.
@@ -102,14 +105,14 @@ Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullab
 - `tryOperationLock` must reserve a connection from the separate lock pool, never the database work pool. Release on success, failure, cancellation, and pre-stream errors. Keep paper/session lock namespaces consistent across app processes.
 - Serialize session generation, jumps, and deletion. A `409` means another operation owns the lock. Client retries must be bounded; do not remove server locks to make an interrupted request succeed.
 - Only accept coverage quotes of at least six non-whitespace characters that appear in actual tutor Chinese messages or board content. Normal tags reference the current turn; completion may make one bounded repair call using saved teaching from this session and problem, never student input, other problems, or reference solutions. Reject headings and completion declarations as evidence. Persist coverage by problem index.
-- When coverage is incomplete, convert `next`/`finish` to `wait`. When finishing a covered problem, visit any unfinished problems, including ones skipped earlier. Only complete the session when every problem is done.
+- When plan-goal coverage is incomplete, convert `next`/`finish` to `wait`. Visit unfinished selected units before completing the session. Preserve effective evidence when goals match, require new evidence for expanded goals, and reject retries with obsolete plan versions. Supplementary analysis must match the snapshot material revision and atomically apply its plan only after success.
 - OpenAI/xAI requests must send the requested output budget (`max_completion_tokens` for OpenAI gpt-5/o-series, otherwise `max_tokens`). All adapters must reject truncation, safety stops, and premature stream termination.
 
 ## Streaming protocol
 
 Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse while the model is still streaming (`createTagParser` in `protocol.ts`).
 
-**Analysis**: `inventorySystemPrompt` first produces a closed `<inventory count="N" pages="P">` with `<overview>` and unique `<item number="1" page="1" endpage="1">` entries. `analysisSystemPrompt` then produces exactly one closed `<problem>` per call with `<content> <answer> <solution> <keypoints> <knowledge> <skills> <reason> <student>`. Validated draft problems persist in `papers.analysisDraft`; only the complete set is published. Default retry resumes the draft; `{ restart: true }` rebuilds the inventory.
+**Analysis**: `inventorySystemPrompt` first produces a closed `<inventory count="N" pages="P">` with `<overview>` and unique `<item number="1" page="1" endpage="1">` entries. A closed `<plan>` selects stable indices and goals before `analysisSystemPrompt` produces one closed `<problem>` per selected item, with `<content> <answer> <solution> <keypoints> <knowledge> <skills> <reason> <student>`. Validated draft problems persist by index in `papers.analysisDraft`; publication requires every selected detail, while unselected directory entries retain nullable analysis. Default retry resumes the draft; `{ restart: true }` rebuilds the inventory.
 
 **Tutor turn** (`buildTutorSystem`):
 
@@ -127,7 +130,7 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 
 - `<msg>` and `<board>` may interleave. Exactly one `<action>` at the end.
 - `wait` = wait for the student. `continue` = client auto-fires another turn (cap 6). `next` / `finish` update session progress.
-- `next` / `finish` and explicit `complete_problem` require all four coverage topics, backed by actual emitted or saved tutor content. Complete coverage alone does not finish a problem. Finish cannot skip unfinished problems. Coverage is a progress guard, not independent semantic verification.
+- `next` / `finish` and explicit `complete_problem` require the current plan's goals, backed by actual emitted or saved tutor content. Complete pace and legacy plans require all four core topics. Complete coverage alone does not finish a problem. Finish cannot skip unfinished selected units. Excluded items are not marked mastered. Coverage is a progress guard, not independent semantic verification.
 - `goodbye` preserves progress and suppresses board work, completion and automatic continuation. The return-home control unlocks only after a successful done, normal stream EOF, and the entire playback/reveal queue is idle; cancellation or failure must not unlock it. Goodbye state is page-local; retry retains intent.
 - Sessions keep a paper/problem snapshot. Paper and session mutations use separate PostgreSQL advisory-lock connections, including across app processes.
 - PDF, upload UI and server share `MAX_PAPER_PAGES = 12`; oversized PDFs are rejected explicitly.
@@ -146,12 +149,12 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 
 ## Invariants
 
-1. **Language split.** Chat + board + UI = Simplified Chinese. TTS `<ja>` / `speech` = Japanese. Do not play Chinese through Fish Audio. Do not put Japanese in the chat bubble or on the board.
+1. **Language split.** Explanations + board + UI = Simplified Chinese. Reading quote/example/exercise content can use the explicitly labeled article language; notes require labeled foreign blocks. TTS `<ja>` / `speech` = Japanese. Foreign quotes are never automatically synthesized.
 2. **TTS sync.** Reveal tokens from `tokenizeForReveal` (LaTeX/bold/links stay atomic). Progress follows `audio.currentTime / duration`. Fallback timer if TTS is missing or muted.
 3. **Short bubbles.** Prompts and fallbacks must keep tutor text as multiple short messages. Never concatenate a turn into one paragraph.
 4. **Markdown + LaTeX.** `$...$` / `$$...$$` only (not `\(`/`\[` in model output). Render through `components/Markdown.tsx` (`remark-math` + `rehype-katex` + `normalizeMath`). Typewriter must not split a formula.
 5. **Board is notes, not chat.** Concise structured Markdown: `##` sections, `**bold**` = chalk highlight, `>` = theorem box, `- [x]` = recap ticks. One board page per problem.
-6. **EPDL coverage.** Every problem must cover: full solution, textbook knowledge points, methods/skills, pitfalls. Honor `student_first` vs `direct_teach`, but the tutor may override with a one-line explanation to the student.
+6. **EPDL coverage.** Complete pace/legacy plans require full solution, knowledge, skills and pitfalls. Other paces use their concrete goals; advanced adds extension and variation feedback. Honor `student_first` vs `direct_teach`. Completion means this plan finished, never mastery of excluded problems.
 7. **Side questions.** Student can interrupt any time. Answer, then return to the current problem.
 8. **Secrets.** API keys live in settings/env. Public settings expose `hasKey` + masked preview only. Never log raw keys or page image payloads.
 9. **No extra LLM/TTS SDKs.** Extend `llm.ts` / `/api/tts` with `fetch`. Keep the Fish call shape: `Authorization: Bearer`, header `model`, body `{ text, reference_id, format: "mp3" }`.

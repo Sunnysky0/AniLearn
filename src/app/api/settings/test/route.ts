@@ -3,10 +3,11 @@ import { getLLMConfig, getSettings } from "@/lib/server/settings";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
     const s = await getSettings();
-    const cfg = getLLMConfig(s, "chat");
+    const body = await req.json().catch(() => ({}));
+    const cfg = getLLMConfig(s, body.purpose === "analysis" ? "analysis" : "chat");
     const started = Date.now();
     const reply = await complete(cfg, {
       system: "你是连接测试助手。",

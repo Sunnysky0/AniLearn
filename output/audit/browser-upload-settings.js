@@ -1,18 +1,19 @@
 async (page) => {
   const results = [];
   await page.goto('http://127.0.0.1:3107/settings');
-  await page.getByRole('radio', { name: 'Anthropic' }).check();
-  await page.getByRole('radio', { name: 'Grok' }).check();
-  await page.getByRole('radio', { name: 'Gemini' }).check();
-  await page.getByRole('radio', { name: 'OpenAI' }).check();
-  results.push({ test: 'settings four provider tabs', outcome: 'pass', fullDummyKeyVisible: (await page.locator('body').innerText()).includes('audit-dummy-key-only') });
+  await page.getByRole('heading', { name: '模型用途' }).waitFor();
+  const originalProtocol = await page.getByLabel('接口类型', { exact: true }).first().inputValue();
+  for (const protocol of ['openai', 'anthropic', 'xai', 'gemini', 'openai-compatible']) await page.getByLabel('接口类型', { exact: true }).first().selectOption(protocol);
+  await page.getByLabel('接口类型', { exact: true }).first().selectOption(originalProtocol);
+  results.push({ test: 'settings provider protocols and independent model purposes', outcome: 'pass', fullDummyKeyVisible: (await page.locator('body').innerText()).includes('upgrade-dummy-secret-123456') });
   await page.screenshot({ path: 'output/playwright/fix-settings.png', fullPage: true });
-  const draft = { name: '审计测试导师', subject: '物理', avatar: '/avatars/rin.png', personality: '耐心严谨', teachingStyle: '先做后讲', speakingStyle: '简短直接', voiceId: 'audit-voice', voiceName: '测试声线', voiceStyle: '[落ち着いた口調]', greeting: '你好，我们来学习。', tags: ['物理'], tagline: '测试导师定制' };
+  const draft = { name: '审计测试导师', avatar: '/avatars/rin.png', personality: '耐心严谨', teachingStyle: '先做后讲', speakingStyle: '简短直接', voiceId: 'audit-voice', voiceName: '测试声线', voiceStyle: '[落ち着いた口調]', greeting: '你好，我们来学习。', tags: ['认真'], tagline: '测试导师定制' };
   const created = await (await page.request.post('http://127.0.0.1:3107/api/tutors', { data: draft })).json();
   const stored = await (await page.request.get('http://127.0.0.1:3107/api/tutors/' + created.id)).json();
   await page.goto('http://127.0.0.1:3107/tutors/' + created.id);
-  results.push({ test: 'custom tutor persona, image, subject and voice persisted and editor loaded', outcome: Object.entries(draft).every(([key, value]) => JSON.stringify(value) === JSON.stringify(stored[key])) ? 'pass' : 'fail' });
-  await page.request.put('http://127.0.0.1:3107/api/settings', { data: { provider: 'openai', providers: { openai: { analysisModel: 'audit-normal', chatModel: 'audit-teach' } }, fish: { enabled: false } } });
+  results.push({ test: 'custom tutor persona, image and voice persisted without subject binding', outcome: Object.entries(draft).every(([key, value]) => JSON.stringify(value) === JSON.stringify(stored[key])) && stored.subject === undefined ? 'pass' : 'fail' });
+  const settings = await (await page.request.get('http://127.0.0.1:3107/api/settings')).json();
+  await page.request.put('http://127.0.0.1:3107/api/settings', { data: { models: { chat: { ...settings.models.chat, model: 'audit-teach' }, analysis: { ...settings.models.analysis, model: 'audit-normal' } }, fish: { enabled: false } } });
   await page.goto('http://127.0.0.1:3107/papers/new');
   await page.locator('input[type=file]').setInputFiles('output/audit/two-pages.pdf');
   await page.getByText('已添加 2 页', { exact: true }).waitFor();
@@ -20,7 +21,7 @@ async (page) => {
   await page.getByRole('button', { name: '上传并开始 AI 解析', exact: true }).click();
   await page.waitForURL('**/papers/*');
   await page.getByText('开始一对一学习', { exact: true }).waitFor();
-  await page.waitForFunction(() => document.body.innerText.includes('已解析'));
+  await page.waitForFunction(() => document.body.innerText.includes('已解析 2 / 2 题'));
   const paperId = Number(page.url().split('/').at(-1));
   const uploaded = await (await page.request.get('http://127.0.0.1:3107/api/papers/' + paperId)).json();
   results.push({ test: 'real two-page PDF rasterized, uploaded and analysis streamed', outcome: uploaded.paper.pageCount === 2 && uploaded.problems.length === 2 ? 'pass' : 'fail', paperId, pageCount: uploaded.paper.pageCount, problems: uploaded.problems.length });

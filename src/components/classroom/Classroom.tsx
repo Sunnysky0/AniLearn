@@ -39,6 +39,8 @@ import type {
   TutorDTO,
 } from "@/lib/types";
 import { GOODBYE_TEXT, turnIntentForText } from "@/lib/types";
+import { DEFAULT_PACE, type TeachingPace } from "@/lib/types";
+import PacePicker from "@/components/PacePicker";
 
 type ClientTurn = {
   streamEnded: boolean;
@@ -172,7 +174,8 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
 }
 
 export default function Classroom(props: Props) {
-  const { tutor, paper, problems } = props;
+  const { tutor, paper } = props;
+  const [problems, setProblems] = useState(props.problems);
   const [messages, setMessages] = useState<MessageDTO[]>(props.initialMessages);
   const [typing, setTyping] = useState<{ id: number; shown: number } | null>(null);
   const [boards, setBoards] = useState<Record<number, BoardDTO>>(() => {
@@ -181,6 +184,42 @@ export default function Classroom(props: Props) {
     return o;
   });
   const [session, setSession] = useState<SessionDTO>(props.session);
+  const [planning, setPlanning] = useState(false);
+  const [planError, setPlanError] = useState("");
+  async function updatePace(pace: TeachingPace, request = "") {
+    setPlanning(true); setPlanError("");
+    try {
+      const res = await fetch(`/api/sessions/${session.id}/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pace, request, planVersion: session.plan?.version ?? 1 }) });
+      const data = await res.json(); if (!res.ok) throw new Error(data.error);
+      setSession(data.session); setViewIdx(data.session.currentIdx);
+      setReturnState(data.session.status === "completed" ? "ready" : "hidden");
+      if (data.message) setMessages((all) => all.some((m) => m.id === data.message.id) ? all : [...all, data.message]);
+    } catch (e) { setPlanError(e instanceof Error ? e.message : String(e)); }
+    finally { setPlanning(false); }
+  }
+  async function cancelPlan() {
+    setPlanning(true);
+    try { const res = await fetch(`/api/sessions/${session.id}/plan`, { method: "DELETE" }); const data = await res.json(); if (!res.ok) throw new Error(data.error); setSession(data.session); }
+    catch (e) { setPlanError(e instanceof Error ? e.message : String(e)); }
+    finally { setPlanning(false); }
+  }
+  async function supplement() {
+    if (!session.pendingPlan) return;
+    setPlanning(true); setPlanError("");
+    try {
+      const res = await fetch(`/api/sessions/${session.id}/supplement`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planVersion: session.pendingPlan.version }) });
+      if (!res.ok || !res.body) { const data = await res.json(); throw new Error(data.error); }
+      const reader = res.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; let completed = false;
+      for (;;) { const part = await reader.read(); if (part.done) { buffer += decoder.decode(); break; } buffer += decoder.decode(part.value, { stream: true }); let nl;
+        while ((nl = buffer.indexOf("\n")) >= 0) { const line = buffer.slice(0, nl); buffer = buffer.slice(nl + 1); if (!line.trim()) continue; const event = JSON.parse(line);
+          if (event.type === "error") throw new Error(event.error);
+          if (event.type === "done") { completed = true; setSession(event.session); setProblems(event.problems); setViewIdx(event.session.currentIdx); setReturnState(event.session.status === "completed" ? "ready" : "hidden"); if (event.message) setMessages((all) => all.some((m) => m.id === event.message.id) ? all : [...all, event.message]); }
+        }
+      }
+      if (!completed || buffer.trim()) throw new Error("补充解析连接提前结束，请重试；已完成解析会保留。");
+    } catch (e) { setPlanError(e instanceof Error ? e.message : String(e)); }
+    finally { setPlanning(false); }
+  }
   const [viewIdx, setViewIdx] = useState(props.session.currentIdx);
   const [freshBlocks, setFreshBlocks] = useState<string[]>([]);
   const [busy, setBusy] = useState<"idle" | "thinking" | "speaking">("idle");
@@ -440,6 +479,8 @@ export default function Classroom(props: Props) {
               lastActionRef.current = item.intent === "goodbye" ? "wait" : item.action;
               if (item.intent === "goodbye" || item.session.status === "completed") setReturnState("waiting");
             }
+          } else if (item.type === "plan") {
+            setSession(item.session); setViewIdx(item.session.currentIdx);
           } else if (item.type === "error") {
             item.turn.failed = true;
             setReturnState("hidden");
@@ -497,7 +538,8 @@ export default function Classroom(props: Props) {
     payload = { ...payload, intent: payload.intent ?? turnIntentForText(text) };
     const turn: ClientTurn = { streamEnded: false, failed: false, cancelled: false };
     currentTurnRef.current = turn;
-    retryRef.current = { intent: payload.intent, problemIdx: payload.problemIdx };
+    payload.planVersion ??= session.plan?.version ?? 1;
+    retryRef.current = { intent: payload.intent, problemIdx: payload.problemIdx, planVersion: payload.planVersion };
     setReturnState(payload.intent === "goodbye" ? "waiting" : "hidden");
     if (text || images.length) {
       appendMessage({
@@ -522,7 +564,7 @@ export default function Classroom(props: Props) {
         fetch(`/api/sessions/${props.session.id}/turn`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, images, intent: payload.intent, problemIdx: payload.problemIdx }),
+          body: JSON.stringify({ text, images, intent: payload.intent, problemIdx: payload.problemIdx, planVersion: payload.planVersion ?? session.plan?.version ?? 1 }),
           signal: ac.signal,
         });
       let res = await request();
@@ -553,7 +595,7 @@ export default function Classroom(props: Props) {
           } catch {
             throw new Error("导师回复格式不完整，请重试。");
           }
-          if (!ev || !["user", "message", "board", "problem", "done", "error"].includes(ev.type) || receivedDone) {
+          if (!ev || !["user", "message", "board", "problem", "plan", "done", "error"].includes(ev.type) || receivedDone) {
             throw new Error("导师回复格式不完整，请重试。");
           }
           if (ev.type === "user") continue;
@@ -645,6 +687,10 @@ export default function Classroom(props: Props) {
       stop();
       await waitIdle();
     }
+    if (session.plan && !session.plan.units.some((unit) => unit.idx === i)) {
+      await updatePace(session.plan.pace, `保留本次计划中所有未完成目标，并加讲第${problems[i].number}题。`);
+      return;
+    }
     autoCountRef.current = 0;
     try {
       const request = () =>
@@ -735,7 +781,8 @@ export default function Classroom(props: Props) {
     downloadText(`AniLearn-${paper.title}-板书笔记.md`, parts.join("\n\n"));
   }
 
-  const doneCount = Object.values(session.progress ?? {}).filter((v) => v === "done").length;
+  const selected = new Set(session.plan?.units.map((u) => u.idx) ?? problems.map((p) => p.idx));
+  const doneCount = [...selected].filter((idx) => session.progress?.[String(idx)] === "done").length;
   const hasTutorMessages = messages.some(isTutorText);
   const showTyping = busy === "thinking" || waitingTTS;
   const speakingNow = typing !== null;
@@ -788,6 +835,7 @@ export default function Classroom(props: Props) {
           </button>
           {showMenu && (
             <div className="absolute right-0 top-11 w-72 space-y-3 bg-white p-4 text-sm text-neutral-700 border border-neutral-200">
+              <PacePicker value={session.plan?.pace ?? DEFAULT_PACE} onChange={(pace) => void updatePace(pace)} disabled={planning || busy !== "idle"} />
               <div className="flex items-center justify-between">
                 <span>语音播放</span>
                 <Toggle on={!muted} onChange={(v) => setMuted(!v)} label="语音播放" />
@@ -823,6 +871,10 @@ export default function Classroom(props: Props) {
           )}
         </div>
       </header>
+      {(session.pendingPlan || planning || planError) && <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-neutral-300 bg-white px-4 py-2 text-sm">
+        {planning ? <span>正在处理学习计划…</span> : session.pendingPlan ? <><span>需要补充解析：{session.pendingPlan.units.filter((u) => !problems[u.idx]?.solution).map((u) => `第${problems[u.idx]?.number}题`).join("、")}</span><button className="border border-neutral-300 px-3 py-1" onClick={() => void supplement()}>确认补充解析</button><button className="px-3 py-1 underline" onClick={() => void cancelPlan()}>取消调整</button></> : null}
+        {planError && <span role="alert">{planError}</span>}
+      </div>}
 
       <div
         role="tablist"
@@ -879,7 +931,7 @@ export default function Classroom(props: Props) {
                 {tutor.name}
                 {speakingNow && <VoiceBars />}
               </div>
-              <div className="truncate text-sm text-neutral-500">{tutor.tags.join(" | ") || tutor.subject}</div>
+              <div className="truncate text-sm text-neutral-500">{tutor.tags.join(" | ")}</div>
             </div>
             <button
               onClick={() => setMuted((v) => !v)}
@@ -973,7 +1025,7 @@ export default function Classroom(props: Props) {
             {session.status === "completed" && busy === "idle" && (
               <div className="fade-up mt-5 border-y-2 border-neutral-900 py-5 text-center">
                 <Check className="mx-auto h-7 w-7 text-neutral-900" />
-                <div className="mt-2 font-serif text-lg font-semibold text-neutral-900">整张试卷已学完</div>
+                <div className="mt-2 font-serif text-lg font-semibold text-neutral-900">本课学习计划已完成</div>
                 <div className="mt-2 text-xs text-neutral-600">板书笔记已整理，可导出复习。</div>
                 <div className="mt-3 flex justify-center gap-2">
                   <button onClick={exportNotes} className="bg-neutral-900 px-4 py-1.5 text-xs font-semibold text-white">
@@ -1185,7 +1237,7 @@ export default function Classroom(props: Props) {
               <div>
                 <h3 className="text-lg font-bold text-neutral-900">课程目录</h3>
                 <p className="text-xs text-neutral-500">
-                  已完成 {doneCount}/{problems.length} 题 · 点击可跳转到任意一题
+                  本课已完成 {doneCount}/{selected.size} 题
                 </p>
               </div>
               <button onClick={() => setShowOutline(false)} className="p-2 text-neutral-500 hover:bg-neutral-100">
@@ -1195,7 +1247,7 @@ export default function Classroom(props: Props) {
             <div className="mt-3 h-1.5 overflow-hidden bg-neutral-100">
               <div
                 className="h-full bg-neutral-900"
-                style={{ width: `${Math.round((doneCount / Math.max(problems.length, 1)) * 100)}%` }}
+                style={{ width: `${Math.round((doneCount / Math.max(selected.size, 1)) * 100)}%` }}
               />
             </div>
             <div className="mt-4 space-y-2">
@@ -1232,6 +1284,8 @@ export default function Classroom(props: Props) {
                         第 {p.number} 题 <span className="font-normal text-neutral-500">{p.type}</span>
                       </div>
                       <div className="line-clamp-1 text-xs text-neutral-500">{p.title}</div>
+                      {!selected.has(i) && <div className="text-xs text-neutral-500">未纳入本课</div>}
+                      {session.plan?.units.find((u) => u.idx === i) && <div className="mt-2 text-xs leading-5 text-neutral-600"><p>{session.plan.units.find((u) => u.idx === i)?.reason}</p>{session.plan.units.find((u) => u.idx === i)?.goals.map((goal) => <p key={goal.id}>{goal.description}</p>)}</div>}
                       <div className="mt-1 flex items-center gap-2 text-[11px]">
                         <span className="text-neutral-800">{difficultyStars(p.difficulty)}</span>
                         <span className={p.strategy === "student_first" ? "text-neutral-800" : "text-violet-600"}>
@@ -1255,7 +1309,7 @@ export default function Classroom(props: Props) {
               <div className="font-serif text-sm">AniLearn</div>
               <h2 className="mt-3 text-xl font-semibold">{paper.title}</h2>
               <div className="mt-2 text-sm text-neutral-600">
-                共 {problems.length} 题 · {session.status === "completed" ? "已全部完成" : `当前第 ${safeIdx + 1} 题`}
+                共 {problems.length} 题 · 本课选讲 {selected.size} 题 · {session.status === "completed" ? "本课计划已完成" : `当前第 ${safeIdx + 1} 题`}
               </div>
             </div>
             {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -2,7 +2,9 @@ async (page) => {
   await page.unroute('**/api/tts');
   const api = async (url, method, data) => (await page.request.fetch('http://127.0.0.1:3107' + url, { method, data })).json();
   const results = [];
-  await api('/api/settings', 'PUT', { fish: { enabled: false }, providers: { openai: { chatModel: 'audit-teach' } } });
+  const settings = await api('/api/settings', 'GET');
+  const models = { ...settings.models, chat: { ...settings.models.chat, model: 'audit-teach' } };
+  await api('/api/settings', 'PUT', { fish: { enabled: false }, models });
   const s = await api('/api/sessions', 'POST', { paperId: 1, tutorId: 1 });
   const submitted = [];
   const observe = request => { if (request.url().endsWith('/turn')) submitted.push(request.postDataJSON()); };
@@ -18,7 +20,7 @@ async (page) => {
   results.push({ test: 'two student inputs interrupt and both are submitted in order', outcome: 'pass', texts: submitted.map(p => p.text).filter(Boolean) });
   await page.goto('http://127.0.0.1:3107/papers');
   page.off('request', observe);
-  await api('/api/settings', 'PUT', { fish: { enabled: true, apiKey: 'audit-fake-fish-key' }, providers: { openai: { chatModel: 'audit-teach' } } });
+  await api('/api/settings', 'PUT', { fish: { enabled: true, apiKey: 'audit-fake-fish-key' }, models });
   const timeoutSession = await api('/api/sessions', 'POST', { paperId: 1, tutorId: 1 });
   let ttsRequests = 0;
   await page.route('**/api/tts', async route => {

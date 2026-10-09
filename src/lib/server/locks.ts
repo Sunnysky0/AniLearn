@@ -9,7 +9,7 @@ const pool = globalForLocks.__aniLearnLockPool ?? new Pool({
 });
 if (process.env.NODE_ENV !== "production") globalForLocks.__aniLearnLockPool = pool;
 
-const namespaces = { paper: 17421, session: 17422 };
+const namespaces = { paper: 17421, session: 17422, reading: 17423, readingSession: 17424 };
 
 // A dedicated connection keeps this lock effective across app processes.
 export async function tryOperationLock(kind: keyof typeof namespaces, id: number) {

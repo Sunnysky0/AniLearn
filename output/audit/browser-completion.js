@@ -19,9 +19,10 @@ async (page) => {
     ensure(res.ok(), 'Fixture SQL failed');
     return res.json();
   };
+  const settings = await api('/api/settings');
   const model = chatModel => api('/api/settings', 'PUT', {
-    provider: 'openai', autoContinue: true,
-    providers: { openai: { apiKey: 'audit-dummy-key-only', baseUrl: 'http://127.0.0.1:4107/v1', chatModel } },
+    autoContinue: true,
+    models: { ...settings.models, chat: { ...settings.models.chat, model: chatModel } },
     fish: { apiKey: 'audit-fake-fish-key', enabled: true },
   });
   const session = async () => {
@@ -147,7 +148,7 @@ async (page) => {
   await page.getByRole('button', { name: '静音', exact: true }).click();
   await page.getByRole('button', { name: '继续讲解', exact: true }).click();
   await page.getByRole('link', { name: '返回首页', exact: true }).waitFor({ timeout: 30000 });
-  ensure(await page.getByText('整张试卷已学完', { exact: true }).isVisible(), 'Natural finish missing');
+  ensure(await page.getByText('本课学习计划已完成', { exact: true }).isVisible(), 'Natural finish missing');
   pass('natural whole-paper completion exposes home return after playback');
   ensure(errors.length === 0, errors.join('; '));
   await page.evaluate(results => localStorage.setItem('completion-browser-results', JSON.stringify(results)), results);

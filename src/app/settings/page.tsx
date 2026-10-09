@@ -1,25 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, CheckCircle2, Cpu, Loader2, Play, PlugZap, Save, School, Volume2, XCircle } from "lucide-react";
+import { Check, CheckCircle2, Loader2, Play, Save, School, Volume2 } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
-import { PROVIDERS, type ProviderId, type PublicSettings, type TTSRequest } from "@/lib/types";
-
-interface Edit {
-  apiKey: string;
-  baseUrl: string;
-  chatModel: string;
-  analysisModel: string;
-}
+import ModelSettings from "@/components/ModelSettings";
+import { type PublicSettings, type TTSRequest } from "@/lib/types";
 
 const inputCls = "w-full  border border-neutral-200 bg-white px-3.5 py-2.5 text-sm outline-none transition   ";
-
-function initialEdits(): Record<ProviderId, Edit> {
-  const out = {} as Record<ProviderId, Edit>;
-  for (const p of PROVIDERS)
-    out[p.id] = { apiKey: "", baseUrl: "", chatModel: p.defaultChatModel, analysisModel: p.defaultAnalysisModel };
-  return out;
-}
 
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
@@ -37,8 +24,6 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
 
 export default function SettingsPage() {
   const [s, setS] = useState<PublicSettings | null>(null);
-  const [provider, setProvider] = useState<ProviderId>("openai");
-  const [edits, setEdits] = useState<Record<ProviderId, Edit>>(initialEdits);
   const [fishKey, setFishKey] = useState("");
   const [fishModel, setFishModel] = useState("s2.1-pro");
   const [fishEnabled, setFishEnabled] = useState(true);
@@ -47,7 +32,6 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [llmTest, setLlmTest] = useState<{ loading: boolean; ok?: boolean; text?: string }>({ loading: false });
   const [ttsTest, setTtsTest] = useState<{ loading: boolean; ok?: boolean; text?: string }>({ loading: false });
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const ttsRequest = useRef<AbortController | null>(null);
@@ -56,17 +40,6 @@ export default function SettingsPage() {
 
   function load(d: PublicSettings) {
     setS(d);
-    setProvider(d.provider);
-    const e = initialEdits();
-    for (const p of PROVIDERS) {
-      e[p.id] = {
-        apiKey: "",
-        baseUrl: d.providers[p.id].baseUrl,
-        chatModel: d.providers[p.id].chatModel,
-        analysisModel: d.providers[p.id].analysisModel,
-      };
-    }
-    setEdits(e);
     setFishKey("");
     setFishModel(d.fish.model);
     setFishEnabled(d.fish.enabled);
@@ -98,19 +71,7 @@ export default function SettingsPage() {
     setSaving(true);
     setError(null);
     try {
-      const providers: Record<string, Partial<Edit>> = {};
-      for (const p of PROVIDERS) {
-        const e = edits[p.id];
-        providers[p.id] = {
-          baseUrl: e.baseUrl,
-          chatModel: e.chatModel,
-          analysisModel: e.analysisModel,
-          ...(e.apiKey.trim() ? { apiKey: e.apiKey.trim() } : {}),
-        };
-      }
       const body = {
-        provider,
-        providers,
         autoContinue,
         ...extra,
         fish: {
@@ -137,23 +98,6 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }
-
-  async function clearKey(target: ProviderId | "fish") {
-    if (target === "fish") await save({ fish: { apiKey: null, model: fishModel, enabled: fishEnabled } });
-    else await save({ providers: { [target]: { apiKey: null } } });
-  }
-
-  async function testLLM() {
-    setLlmTest({ loading: true });
-    if (!(await save())) return setLlmTest({ loading: false });
-    const r = await fetch("/api/settings/test", { method: "POST" });
-    const j = await r.json();
-    setLlmTest({
-      loading: false,
-      ok: !!j.ok,
-      text: j.ok ? `${j.model} 回复：「${j.reply}」（${(j.ms / 1000).toFixed(1)}s）` : j.error,
-    });
   }
 
   async function testTTS() {
@@ -234,11 +178,6 @@ export default function SettingsPage() {
     }
   }
 
-  const meta = PROVIDERS.find((p) => p.id === provider) ?? PROVIDERS[0];
-  const pub = s?.providers[provider];
-  const edit = edits[provider];
-  const setEdit = (patch: Partial<Edit>) => setEdits((all) => ({ ...all, [provider]: { ...all[provider], ...patch } }));
-
   return (
     <div className="min-h-screen">
       <AppHeader />
@@ -255,139 +194,7 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <section className="space-y-5 border-t-2 border-neutral-900 py-6">
-          <h2 className="flex items-center gap-2 font-bold text-neutral-800">
-            <Cpu className="h-5 w-5 text-neutral-800" /> AI 模型服务商
-          </h2>
-          <div role="radiogroup" aria-label="AI 模型服务商" className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            {PROVIDERS.map((p) => {
-              const has = s?.providers[p.id].hasKey;
-              return (
-                <label
-                  key={p.id}
-                  className={`relative cursor-pointer p-4 text-left border-2 transition focus-within:outline-2 focus-within:outline-offset-2 ${
-                    provider === p.id
-                      ? "bg-white border-neutral-900"
-                      : "bg-transparent border-neutral-300 hover:border-neutral-900"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="provider"
-                    value={p.id}
-                    checked={provider === p.id}
-                    onChange={() => setProvider(p.id)}
-                    className="square-radio mb-4 h-4 w-4"
-                    aria-label={p.name}
-                  />
-                  <div className="font-serif text-lg font-semibold text-neutral-900">{p.name}</div>
-                  <div className="mt-1 text-xs text-neutral-600">{p.vendor}</div>
-                  <div className="mt-3 text-[11px] text-neutral-600">{has ? "已配置" : "未配置"}</div>
-                </label>
-              );
-            })}
-          </div>
-
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <label htmlFor="provider-key" className="text-sm font-semibold text-neutral-700">
-                {meta.name} API Key
-              </label>
-              <div className="mt-2 flex gap-2">
-                <input
-                  id="provider-key"
-                  type="password"
-                  value={edit.apiKey}
-                  onChange={(e) => setEdit({ apiKey: e.target.value })}
-                  placeholder={pub?.hasKey ? `已配置：${pub.keyPreview}（留空则保持不变）` : meta.keyHint}
-                  className={inputCls}
-                  autoComplete="off"
-                />
-                {pub?.keySource === "db" && (
-                  <button
-                    onClick={() => void clearKey(provider)}
-                    className="shrink-0 px-3 text-sm text-neutral-500 border border-neutral-200 hover:text-neutral-800"
-                  >
-                    清除
-                  </button>
-                )}
-              </div>
-              <p className="mt-1.5 text-xs text-neutral-500">
-                {pub?.keySource === "env"
-                  ? `当前使用环境变量（${meta.envKeys.join(" / ")}）中的 Key。`
-                  : `也可以通过环境变量 ${meta.envKeys[0]} 配置。`}
-              </p>
-            </div>
-            <div>
-              <label htmlFor="chat-model" className="text-sm font-semibold text-neutral-700">
-                对话模型（讲课）
-              </label>
-              <input
-                id="chat-model"
-                list={`chat-${provider}`}
-                value={edit.chatModel}
-                onChange={(e) => setEdit({ chatModel: e.target.value })}
-                className={`${inputCls} mt-2`}
-              />
-              <datalist id={`chat-${provider}`}>
-                {meta.models.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-              <p className="mt-1.5 text-xs text-neutral-500">建议选择响应快的模型，讲课更流畅。</p>
-            </div>
-            <div>
-              <label htmlFor="analysis-model" className="text-sm font-semibold text-neutral-700">
-                解析模型（识别试卷）
-              </label>
-              <input
-                id="analysis-model"
-                list={`ana-${provider}`}
-                value={edit.analysisModel}
-                onChange={(e) => setEdit({ analysisModel: e.target.value })}
-                className={`${inputCls} mt-2`}
-              />
-              <datalist id={`ana-${provider}`}>
-                {meta.models.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-              <p className="mt-1.5 text-xs text-neutral-500">需支持图片输入，建议选择能力最强的模型。</p>
-            </div>
-            <div className="sm:col-span-2">
-              <label htmlFor="provider-url" className="text-sm font-semibold text-neutral-700">
-                自定义 Base URL（可选）
-              </label>
-              <input
-                id="provider-url"
-                value={edit.baseUrl}
-                onChange={(e) => setEdit({ baseUrl: e.target.value })}
-                placeholder={meta.defaultBaseUrl}
-                className={`${inputCls} mt-2`}
-              />
-              <p className="mt-1.5 text-xs text-neutral-500">使用 API 中转/代理服务时填写，留空使用官方地址。</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => void testLLM()}
-              disabled={llmTest.loading || saving}
-              className="inline-flex items-center gap-2 bg-neutral-800 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {llmTest.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}{" "}
-              保存并测试连接
-            </button>
-            {llmTest.text && (
-              <span
-                className={`flex items-center gap-1.5 text-sm ${llmTest.ok ? "text-neutral-800" : "text-neutral-800"}`}
-              >
-                {llmTest.ok ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <XCircle className="h-4 w-4 shrink-0" />}
-                <span className="break-all">{llmTest.text}</span>
-              </span>
-            )}
-          </div>
-        </section>
-
+        <ModelSettings />
         <section className="space-y-5 border-t-2 border-neutral-900 py-6">
           <div className="flex items-center justify-between">
             <h2 className="flex items-center gap-2 font-bold text-neutral-800">
@@ -416,7 +223,7 @@ export default function SettingsPage() {
                 />
                 {s?.fish.keySource === "db" && (
                   <button
-                    onClick={() => void clearKey("fish")}
+                    onClick={() => void save({ fish: { apiKey: null } })}
                     className="shrink-0 px-3 text-sm text-neutral-500 border border-neutral-200 hover:text-neutral-800"
                   >
                     清除

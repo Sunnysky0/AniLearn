@@ -9,7 +9,7 @@ function load(file) {
   mod.filename = filename;
   mod.paths = module.paths;
   const requireOriginal = mod.require.bind(mod);
-  mod.require = id => id.startsWith('.') && fs.existsSync(path.resolve(path.dirname(filename), id + '.ts'))
+  mod.require = id => id.startsWith('@/') ? load(path.resolve('src', id.slice(2) + '.ts')) : id.startsWith('.') && fs.existsSync(path.resolve(path.dirname(filename), id + '.ts'))
     ? load(path.resolve(path.dirname(filename), id + '.ts')) : requireOriginal(id);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, filename);
   return mod.exports;

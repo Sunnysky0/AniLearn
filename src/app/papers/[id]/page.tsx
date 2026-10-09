@@ -5,7 +5,7 @@ import { papers, problems, sessions, tutors } from "@/db/schema";
 import { AppHeader } from "@/components/AppHeader";
 import PaperView from "@/components/PaperView";
 import { listTutors, paperPageMimes, toPaperDTO, visibleProblems } from "@/lib/server/data";
-import { getSettings, resolveProviderKey } from "@/lib/server/settings";
+import { getSettings, isLLMReady } from "@/lib/server/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +40,7 @@ export default async function PaperPage({ params }: { params: Promise<{ id: stri
         problems={visibleProblems(paper, probs)}
         tutors={tutorList}
         sessions={sess.map((s) => ({ ...s, updatedAt: s.updatedAt.toISOString() }))}
-        llmReady={!!resolveProviderKey(settings, settings.provider).key}
+        llmReady={isLLMReady(settings, "analysis")}
       />
     </div>
   );

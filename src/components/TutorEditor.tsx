@@ -8,13 +8,12 @@ import { fileToJpegDataUrl } from "@/lib/client/media";
 import {
   DEFAULT_TUTOR_AVATAR,
   DEFAULT_VOICE_ID,
-  SUBJECTS,
   type TutorDTO,
   type TutorInput,
   type VoiceItem,
 } from "@/lib/types";
 
-const AVATARS = [DEFAULT_TUTOR_AVATAR, "/avatars/rin.png", "/avatars/haruto.png", "/avatars/sakura.png"];
+const AVATARS = [DEFAULT_TUTOR_AVATAR, "/avatars/rin.png", "/avatars/haruto.png", "/avatars/artoria.png"];
 
 const PERSONALITY_PRESETS = [
   { label: "温柔耐心", text: "温柔耐心、亲切细腻，善于鼓励学生。学生答错时先肯定思路中的亮点，再温和地指出问题。" },
@@ -54,8 +53,7 @@ const VOICE_TAGS = [
 const EMPTY: TutorInput = {
   name: "",
   avatar: AVATARS[0],
-  subject: "数学",
-  tags: ["数学"],
+  tags: [],
   tagline: "",
   personality: PERSONALITY_PRESETS[0].text,
   teachingStyle: STYLE_PRESETS[0].text,
@@ -236,13 +234,6 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
                   placeholder="如：艾琳"
                   className={inputCls}
                 />
-              </Field>
-              <Field label="任教学科">
-                <select value={form.subject} onChange={(e) => set("subject", e.target.value)} className={inputCls}>
-                  {SUBJECTS.map((s) => (
-                    <option key={s}>{s}</option>
-                  ))}
-                </select>
               </Field>
               <Field label="标签" hint="用顿号或逗号分隔，最多 6 个">
                 <input
@@ -490,7 +481,7 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
                   <div className="flex items-center gap-2 text-lg font-bold text-neutral-800">
                     {form.name || "未命名"}
                   </div>
-                  <div className="text-sm text-neutral-500">{tags.join(" | ") || form.subject}</div>
+                  <div className="text-sm text-neutral-500">{tags.join(" | ")}</div>
                 </div>
               </div>
               <div className="flex gap-2.5">

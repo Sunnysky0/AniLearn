@@ -1,5 +1,7 @@
 import type { AnalyzedProblem, PaperInventory } from "@/lib/types";
 import { createTagParser, innerTag, listItems, type TagBlock } from "./protocol";
+import { streamChat, type LLMConfig, type LLMPart } from "./llm";
+import { analysisSystemPrompt } from "./prompts";
 
 export function parseInventory(raw: string, pageCount: number): PaperInventory {
   const parser = createTagParser(["inventory"]);
@@ -9,14 +11,14 @@ export function parseInventory(raw: string, pageCount: number): PaperInventory {
     throw new Error("题目清单未完整覆盖全部页面，请重试。");
   }
   const itemParser = createTagParser(["item"]);
-  const items = [...itemParser.push(block.body), ...itemParser.end()].map((b) => {
+  const items = [...itemParser.push(block.body), ...itemParser.end()].map((b, idx) => {
     const page = Number(b.attrs.page);
     const endPage = Number(b.attrs.endpage);
     if (!b.closed || !b.attrs.number || !b.body.trim() ||
       !Number.isInteger(page) || !Number.isInteger(endPage) || page < 1 || endPage < page || endPage > pageCount) {
       throw new Error("题目清单的题号、题干或页码不完整，请重试。");
     }
-    return { number: b.attrs.number, page, endPage, content: b.body.trim() };
+    return { idx, number: b.attrs.number, page, endPage, content: b.body.trim(), title: b.attrs.title || "", difficulty: Number(b.attrs.difficulty) || 3, topics: (b.attrs.topics || "").split("|").filter(Boolean), methods: (b.attrs.methods || "").split("|").filter(Boolean), traps: (b.attrs.traps || "").split("|").filter(Boolean), studentWork: b.attrs.student || "", core: b.attrs.core === "true" };
   });
   if (!items.length || Number(block.attrs.count) !== items.length || new Set(items.map((p) => p.number)).size !== items.length) {
     throw new Error("题目数量或题号校验失败，请重试。");
@@ -24,6 +26,19 @@ export function parseInventory(raw: string, pageCount: number): PaperInventory {
   const overview = innerTag(block.body, "overview");
   if (!overview) throw new Error("试卷整体分析缺失，请重试。");
   return { title: block.attrs.title || "", overview, items };
+}
+
+export async function analyzeOne(cfg: LLMConfig, subject: string, item: PaperInventory["items"][number], pages: LLMPart[], signal: AbortSignal, onDelta?: (length: number) => void): Promise<AnalyzedProblem> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const parser = createTagParser(["problem"]); const blocks: TagBlock[] = [];
+      for await (const delta of streamChat(cfg, { system: analysisSystemPrompt(subject) + "\n本次只解析指定的一题，必须闭合所有标签。", messages: [{ role: "user", content: [{ type: "text", text: `只解析第 ${item.number} 题，page="${item.page}"。题干：${item.content}` }, ...pages.slice((item.page - 1) * 2, item.endPage * 2)] }], maxTokens: 16000, signal })) { blocks.push(...parser.push(delta)); onDelta?.(delta.length); }
+      blocks.push(...parser.end()); if (blocks.length !== 1 || parser.stray().trim()) throw new Error("题目解析格式不完整。");
+      return parseAnalyzedProblem(blocks[0], item);
+    } catch (e) { lastError = e; signal.throwIfAborted(); }
+  }
+  throw lastError;
 }
 
 export function parseAnalyzedProblem(b: TagBlock, item: PaperInventory["items"][number]): AnalyzedProblem {

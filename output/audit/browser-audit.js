@@ -4,6 +4,12 @@ async (page) => {
     const r = await page.request.fetch('http://127.0.0.1:3107' + url, { method, data });
     return r.json();
   };
+  const settings = await api('/api/settings', 'GET');
+  const setChat = model => ({ models: { ...settings.models, chat: { ...settings.models.chat, model } } });
+  const initial = await api('/api/sessions', 'POST', { paperId: 1, tutorId: 1 });
+  await page.goto('http://127.0.0.1:3107/classroom/' + initial.id);
+  await page.getByRole('button', { name: '开始上课', exact: true }).click();
+  await page.getByRole('button', { name: '老师更新了板书', exact: true }).waitFor();
   if (await page.getByRole('button', { name: '继续上课', exact: true }).isVisible()) await page.getByRole('button', { name: '继续上课', exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   results.push(await page.evaluate(() => {
@@ -17,7 +23,7 @@ async (page) => {
   const download = await dl;
   await download.saveAs('output/audit/fix-exported-notes.md');
   results.push({ test: 'notes export', outcome: 'pass', filename: download.suggestedFilename() });
-  await api('/api/settings', 'PUT', { fish: { apiKey: 'audit-fake-fish-key', enabled: true }, providers: { openai: { chatModel: 'audit-teach' } } });
+  await api('/api/settings', 'PUT', { fish: { apiKey: 'audit-fake-fish-key', enabled: true }, ...setChat('audit-teach') });
   const session = await api('/api/sessions', 'POST', { paperId: 1, tutorId: 1 });
   const sampleRate = 8000;
   const duration = 4;
@@ -55,11 +61,11 @@ async (page) => {
   results.push({ test: 'muted mode skips TTS', outcome: tts.length === before ? 'pass' : 'fail', requestsBefore: before, requestsAfter: tts.length });
   await page.getByRole('button', { name: '停止讲解', exact: true }).click();
   await page.unroute('**/api/tts');
-  await api('/api/settings', 'PUT', { fish: { enabled: false }, providers: { openai: { chatModel: 'audit-next' } } });
+  await api('/api/settings', 'PUT', { fish: { enabled: false }, ...setChat('audit-next') });
   const nextSession = await api('/api/sessions', 'POST', { paperId: 1, tutorId: 1 });
   await page.goto('http://127.0.0.1:3107/classroom/' + nextSession.id);
   await page.getByRole('button', { name: '开始上课', exact: true }).click();
-  await page.waitForFunction(() => document.body.innerText.includes('整张试卷已学完！'), null, { timeout: 30000 });
+  await page.waitForFunction(() => document.body.innerText.includes('本课学习计划已完成'), null, { timeout: 30000 });
   results.push({ test: 'next starts next problem automatically', outcome: 'pass', sessionId: nextSession.id });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'output/playwright/fix-mobile.png', fullPage: true });

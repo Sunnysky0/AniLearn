@@ -7,7 +7,7 @@ import { PaperPageThumbnail } from "@/components/PaperPageThumbnail";
 export const PAPER_STATUS: Record<string, { label: string; cls: string }> = {
   uploaded: { label: "待解析", cls: "bg-neutral-100 text-neutral-600" },
   analyzing: { label: "解析中", cls: "bg-neutral-100 text-neutral-800" },
-  ready: { label: "已解析", cls: "bg-neutral-100 text-neutral-800" },
+  ready: { label: "就绪", cls: "bg-neutral-100 text-neutral-800" },
   failed: { label: "解析失败", cls: "bg-neutral-100 text-neutral-800" },
 };
 
@@ -42,7 +42,7 @@ export function PaperCard({ paper, problemCount }: { paper: PaperDTO; problemCou
           <span className="bg-neutral-100 px-1.5 py-0.5 text-neutral-800">{paper.subject}</span>
           <span>{paper.pageCount} 页</span>
           <span>·</span>
-          <span>{problemCount} 题</span>
+          <span>已解析 {problemCount} / {paper.inventory?.items.length ?? problemCount} 题</span>
         </div>
       </div>
     </Link>

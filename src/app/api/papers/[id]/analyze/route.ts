@@ -10,6 +10,8 @@ import { tryOperationLock } from "@/lib/server/locks";
 import { getLLMConfig, getSettings } from "@/lib/server/settings";
 import type { AnalyzedProblem, AnalysisDraft, AnalysisEvent } from "@/lib/types";
 import { decodePaperText, paperTextFormat } from "@/lib/paper-source";
+import { makeLearningPlan } from "@/lib/server/learning-plan";
+import { isTeachingPace, type TeachingPace } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -28,9 +30,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const cfg = getLLMConfig(await getSettings(), "analysis");
     const pages = await db.select().from(paperPages).where(eq(paperPages.paperId, paperId)).orderBy(asc(paperPages.pageIndex));
     if (!pages.length) return Response.json({ error: "这份试卷还没有上传任何页面" }, { status: 400 });
-    const body = (await req.json().catch(() => ({}))) as { restart?: boolean };
+    const body = (await req.json().catch(() => ({}))) as { restart?: boolean; pace?: TeachingPace; request?: string };
     const draft: AnalysisDraft = !body.restart && paper.analysisDraft
       ? structuredClone(paper.analysisDraft) : { inventory: null, completed: [] };
+    draft.indexed ??= Object.fromEntries(draft.completed.map((p, idx) => [String(idx), p]));
+    if (draft.inventory) draft.inventory.items = draft.inventory.items.map((item, idx) => ({ ...item, idx }));
     // Keep two parts per source page so inventory page ranges select the same material.
     const allPages: LLMPart[] = pages.flatMap((pg, i) => [
       { type: "text", text: `第 ${i + 1} 页${paperTextFormat(pg.mime) ? `（${paperTextFormat(pg.mime)} 原文）` : ""}：` },
@@ -62,11 +66,18 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
             draft.inventory = parseInventory(raw, pages.length);
             await saveDraft();
           }
-          for (const [idx, p] of draft.completed.entries()) {
+          for (const [key, p] of Object.entries(draft.indexed!)) {
+            const idx = Number(key);
             send({ type: "problem", problem: { ...p, idx, id: -idx - 1 } });
           }
           const inventory = draft.inventory;
-          for (let idx = draft.completed.length; idx < inventory.items.length; idx++) {
+          const pace = isTeachingPace(body.pace) ? body.pace : paper.pace;
+          draft.plan ??= await makeLearningPlan(cfg, inventory, pace, typeof body.request === "string" ? body.request.slice(0, 2000) : paper.learningRequest, 1, signal);
+          send({ type: "inventory", inventory, plan: draft.plan });
+          await saveDraft();
+          for (const unit of draft.plan.units) {
+            const idx = unit.idx;
+            if (draft.indexed![String(idx)]) continue;
             const item = inventory.items[idx];
             let lastError: unknown;
             let result: AnalyzedProblem | undefined;
@@ -98,6 +109,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
             if (lastError) throw lastError;
             if (!result) throw new Error(`第 ${item.number} 题未完成，请重试。`);
             draft.completed.push(result);
+            draft.indexed![String(idx)] = result;
             await saveDraft();
             send({ type: "problem", problem: { ...result, idx, id: -idx - 1 } });
           }
@@ -109,9 +121,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
                 .where(and(eq(sessions.paperId, paperId), isNull(sessions.snapshot)));
             }
             await tx.delete(problems).where(eq(problems.paperId, paperId));
-            await tx.insert(problems).values(draft.completed.map((p, idx) => ({ ...p, idx, paperId })));
+            await tx.insert(problems).values(Object.entries(draft.indexed!).map(([idx, p]) => ({ ...p, idx: Number(idx), paperId })));
             const [updated] = await tx.update(papers).set({
               status: "ready", error: null, analysisDraft: null, overview: inventory.overview,
+              inventory, analysisPlan: draft.plan, pace, revision: paper.revision + 1,
               title: paper.title.startsWith("未命名") && inventory.title ? inventory.title.slice(0, 100) : paper.title,
             }).where(eq(papers.id, paperId)).returning();
             return updated;

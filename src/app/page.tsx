@@ -6,7 +6,7 @@ import { papers, problems, sessions, tutors } from "@/db/schema";
 import { AppHeader } from "@/components/AppHeader";
 import { PaperCard } from "@/components/PaperCard";
 import { listTutors, paperPageMimes, toPaperDTO } from "@/lib/server/data";
-import { getSettings, isTTSReady, providerMeta, resolveProviderKey } from "@/lib/server/settings";
+import { getSettings, isTTSReady, isLLMReady } from "@/lib/server/settings";
 import { formatDate } from "@/lib/text";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +35,7 @@ export default async function HomePage() {
       currentIdx: sessions.currentIdx,
       status: sessions.status,
       progress: sessions.progress,
+      plan: sessions.plan,
       updatedAt: sessions.updatedAt,
       paperTitle: papers.title,
       subject: papers.subject,
@@ -52,9 +53,9 @@ export default async function HomePage() {
     .from(papers)
     .orderBy(desc(papers.createdAt))
     .limit(8);
-  const llmReady = !!resolveProviderKey(settings, settings.provider).key;
+  const llmReady = isLLMReady(settings, "chat");
   const ttsReady = isTTSReady(settings);
-  const meta = providerMeta(settings.provider);
+  const connection = settings.connections.find((c) => c.id === settings.models.chat.connectionId);
 
   return (
     <div className="min-h-dvh">
@@ -81,8 +82,8 @@ export default async function HomePage() {
           <span className="inline-flex min-w-0 items-center gap-2 break-all">
             {llmReady ? <Check className="h-3.5 w-3.5 shrink-0" /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
             {llmReady
-              ? `${meta.name} · ${settings.providers[settings.provider].chatModel}`
-              : `模型未配置 · ${meta.name}`}
+              ? `${connection?.name} · ${settings.models.chat.model}`
+              : `讲解模型未配置`}
           </span>
           <span>{ttsReady ? "日语语音已配置" : "纯文字模式"}</span>
           {!llmReady && (
@@ -98,8 +99,8 @@ export default async function HomePage() {
               {recent.length > 0 ? (
                 <div className="divide-y divide-[#c8c8c8]">
                   {recent.map((r) => {
-                    const done = Object.values(r.progress ?? {}).filter((v) => v === "done").length;
-                    const total = Number(r.total) || 1;
+                    const done = r.plan ? r.plan.units.filter((u) => r.progress[String(u.idx)] === "done").length : Object.values(r.progress ?? {}).filter((v) => v === "done").length;
+                    const total = r.plan?.units.length ?? (Number(r.total) || 1);
                     return (
                       <Link
                         key={r.id}
@@ -166,7 +167,7 @@ export default async function HomePage() {
                   />
                   <div className="min-w-0">
                     <h3 className="text-lg font-semibold">{t.name}</h3>
-                    <p className="mt-1 text-xs text-[#626262]">{t.subject}</p>
+                    <p className="mt-1 text-xs text-[#626262]">{t.tags.join(" · ")}</p>
                     <p className="mt-2 text-xs leading-relaxed text-[#626262]">{t.tagline}</p>
                   </div>
                 </Link>

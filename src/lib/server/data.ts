@@ -1,4 +1,5 @@
 import { and, asc, eq, sql } from "drizzle-orm";
+import { directoryProblems, fullPlan } from "./learning-plan";
 import { db } from "@/db";
 import { boards, messages, paperPages, papers, problems, sessions, tutors } from "@/db/schema";
 import {
@@ -27,7 +28,6 @@ export const toTutorDTO = (r: TutorRow): TutorDTO => ({
   id: r.id,
   name: r.name,
   avatar: r.avatar,
-  subject: r.subject,
   tags: r.tags ?? [],
   tagline: r.tagline,
   personality: r.personality,
@@ -47,6 +47,11 @@ export const paperPageMimes = () => {
 };
 
 export const toPaperDTO = (r: PaperRow, pageMimes?: string[]): PaperDTO => ({
+  pace: r.pace,
+  learningRequest: r.learningRequest,
+  inventory: r.inventory,
+  analysisPlan: r.analysisPlan,
+  revision: r.revision,
   id: r.id,
   title: r.title,
   subject: r.subject,
@@ -58,7 +63,7 @@ export const toPaperDTO = (r: PaperRow, pageMimes?: string[]): PaperDTO => ({
   createdAt: r.createdAt.toISOString(),
 });
 
-export const toProblemDTO = (r: ProblemRow): ProblemDTO => ({
+export const toProblemDTO = (r: ProblemRow | ProblemDTO): ProblemDTO => ({
   id: r.id,
   idx: r.idx,
   number: r.number,
@@ -70,6 +75,7 @@ export const toProblemDTO = (r: ProblemRow): ProblemDTO => ({
   keyPoints: r.keyPoints ?? [],
   knowledgePoints: r.knowledgePoints ?? [],
   skills: r.skills ?? [],
+  analysis: "analysis" in r ? r.analysis : "ready",
   difficulty: r.difficulty,
   strategy: r.strategy,
   strategyReason: r.strategyReason,
@@ -78,6 +84,8 @@ export const toProblemDTO = (r: ProblemRow): ProblemDTO => ({
 });
 
 export const toSessionDTO = (r: SessionRow): SessionDTO => ({
+  plan: r.plan,
+  pendingPlan: r.pendingPlan,
   id: r.id,
   paperId: r.paperId,
   tutorId: r.tutorId,
@@ -119,10 +127,10 @@ export async function loadClassroom(sessionId: number) {
   if (session.snapshot) {
     const snapshot = session.snapshot;
     return {
-      session,
+      session: { ...session, plan: session.plan ?? fullPlan(snapshot.problems) },
       tutor,
-      paper: { ...paper, ...snapshot.paper, createdAt: new Date(snapshot.paper.createdAt) },
-      problems: snapshot.problems.map((p) => ({ ...p, paperId: session.paperId })),
+      paper: { ...paper, ...snapshot.paper, inventory: snapshot.inventory ?? snapshot.paper.inventory ?? null, analysisPlan: snapshot.paper.analysisPlan ?? null, revision: snapshot.paper.revision ?? 0, createdAt: new Date(snapshot.paper.createdAt) },
+      problems: directoryProblems(snapshot.inventory ?? snapshot.paper.inventory, snapshot.problems).map((p) => ({ ...p, paperId: session.paperId })),
     };
   }
   const probs = await db
@@ -130,20 +138,21 @@ export async function loadClassroom(sessionId: number) {
     .from(problems)
     .where(eq(problems.paperId, paper.id))
     .orderBy(asc(problems.idx));
-  return { session, tutor, paper, problems: probs };
+  return { session: { ...session, plan: session.plan ?? fullPlan(probs) }, tutor, paper, problems: directoryProblems(paper.inventory, probs.map(toProblemDTO)).map((p) => ({ ...p, paperId: session.paperId })) };
 }
 
 export function classroomSnapshot(paper: PaperRow, rows: ProblemRow[]): ClassroomSnapshot {
-  return { paper: toPaperDTO(paper), problems: rows.map(toProblemDTO) };
+  return { paper: toPaperDTO(paper), problems: directoryProblems(paper.inventory, rows.map(toProblemDTO)), inventory: paper.inventory };
 }
 
 export function visibleProblems(paper: PaperRow, rows: ProblemRow[]): ProblemDTO[] {
   // A failed reanalysis must keep showing the last published problem set.
   // Draft rows are useful while an unpublished analysis is still running.
   if (paper.analysisDraft && (paper.status === "analyzing" || !rows.length)) {
-    return paper.analysisDraft.completed.map((p, idx) => ({ ...p, idx, id: -idx - 1 }));
+    const indexed = paper.analysisDraft.indexed ?? Object.fromEntries(paper.analysisDraft.completed.map((p, idx) => [String(idx), p]));
+    return directoryProblems(paper.analysisDraft.inventory, Object.entries(indexed).map(([key, p]) => ({ ...p, idx: Number(key), id: -Number(key) - 1 })));
   }
-  return rows.map(toProblemDTO);
+  return directoryProblems(paper.inventory, rows.map(toProblemDTO));
 }
 
 // ---------------- Tutor presets & seeding ----------------
@@ -152,13 +161,12 @@ export const PRESET_TUTORS: TutorInput[] = [
   {
     name: DEFAULT_TUTOR_NAME,
     avatar: DEFAULT_TUTOR_AVATAR,
-    subject: "数学",
-    tags: ["数学", "少女与战车", "优雅从容"],
+    tags: ["少女与战车", "优雅从容"],
     tagline: "和大吉岭一起从容拆解难题，把思路梳理得像一杯好茶",
     personality:
       "你是《少女与战车》中的大吉岭，圣葛罗莉安娜女子学院的队长。举止优雅、沉着自信，喜爱红茶，擅长观察与判断。辅导时耐心礼貌，偶尔用红茶或战术作简短类比，带一点含蓄的幽默；学生答错时先肯定思路中的亮点，再平静地引导他发现问题。",
     teachingStyle:
-      "从容的启发式教学：先审题、辨明条件与目标，像制定战术一样建立解题框架，再逐步推导。善用问题和图像引导学生思考，每个关键步骤都确认理解；讲完后整理完整解法、教材知识点、方法与易错点。角色比喻简短适量，不打断数学讲解。",
+      "从容的启发式教学：先审题、辨明条件与目标，像制定战术一样建立解题框架，再逐步推导。善用问题和图像引导学生思考，每个关键步骤都确认理解；讲完后整理完整解法、教材知识点、方法与易错点。角色比喻简短适量，不打断学习主线。",
     speakingStyle: "语气优雅、沉静而亲切，表达简短清晰。常说“先别急着落笔”“让我们从条件出发”“很好，思路已经清楚了”。偶尔以品茶的节奏提醒学生从容思考，不堆砌格言，也不编造名人引语。",
     voiceId: DEFAULT_VOICE_ID,
     voiceName: "大吉岭",
@@ -168,13 +176,12 @@ export const PRESET_TUTORS: TutorInput[] = [
   {
     name: "远坂凛",
     avatar: "/avatars/rin.png",
-    subject: "物理",
-    tags: ["物理", "Fate", "外冷内热"],
-    tagline: "和远坂凛一起建立物理模型，清晰果断地拆解难题",
+    tags: ["Fate", "外冷内热"],
+    tagline: "和远坂凛一起建立思考框架，清晰果断地拆解难题",
     personality:
-      "你是《Fate/stay night》中的远坂凛，聪明、自律、自信，外表强势但内心关心他人，带一点克制的傲娇和幽默。辅导时认真负责，善于分析与判断，对物理概念和推导要求严谨。学生答错时明确指出问题并耐心引导，不嘲讽、不羞辱学生；角色设定只用于交流风格，物理讲解遵循现实科学。",
+      "你是《Fate/stay night》中的远坂凛，聪明、自律、自信，外表强势但内心关心他人，带一点克制的傲娇和幽默。辅导时认真负责，善于分析与判断，对概念、证据和推导要求严谨。学生答错时明确指出问题并耐心引导，不嘲讽、不羞辱学生；角色设定只用于交流风格，各学科讲解遵循现实依据。",
     teachingStyle:
-      "结构化精讲：先建立物理模型，做受力/运动/能量分析，再规范推导；强调解题模板和规范书写，最后总结同类题型的通法。",
+      "结构化精讲：先建立思考框架，辨明条件与依据，再规范推导；强调解题模板和规范书写，最后总结同类题型的通法。",
     speakingStyle: "表达自信、简洁利落，偶尔带一点轻微的傲娇。常说“先把条件看清楚”“这一点可别漏掉”“不错，接着来”。鼓励具体自然，讲题时专注条件、模型和推导。",
     voiceId: "0efe389bb7b544c690da2fbeee0831d8",
     voiceName: "远坂凛",
@@ -184,9 +191,8 @@ export const PRESET_TUTORS: TutorInput[] = [
   {
     name: "晴人",
     avatar: "/avatars/haruto.png",
-    subject: "化学",
-    tags: ["化学", "幽默", "生活联想"],
-    tagline: "阳光幽默的化学导师，把抽象原理讲成生活故事",
+    tags: ["幽默", "生活联想"],
+    tagline: "阳光幽默的学习伙伴，把抽象原理讲成生活故事",
     personality: "阳光开朗、幽默风趣，喜欢用生活中的例子和小段子活跃气氛，充满正能量。",
     teachingStyle:
       "情境联想教学：把抽象的原理和生活现象联系起来；用口诀和记忆技巧帮助记忆；节奏明快，经常设置小挑战让学生先试一试。",
@@ -197,19 +203,18 @@ export const PRESET_TUTORS: TutorInput[] = [
     greeting: "嗨！我是晴人，准备好和我一起闯关这张卷子了吗？",
   },
   {
-    name: "小樱",
-    avatar: "/avatars/sakura.png",
-    subject: "英语",
-    tags: ["英语", "语文", "阅读写作"],
-    tagline: "元气满满的文科导师，帮你找到解题的语感",
-    personality: "活泼可爱、热情感性，善于共情，对学生的每一点进步都会真诚夸奖。",
+    name: "阿尔托莉雅",
+    avatar: "/avatars/artoria.png",
+    tags: ["Fate", "沉稳认真", "责任感"],
+    tagline: "与你并肩求索，认真面对每一次挑战",
+    personality: "你是《Fate/stay night》中的阿尔托莉雅·潘德拉贡（Saber）。沉稳、诚实、认真，有强烈的责任感，尊重学生的努力。对错误明确指出但不苛责，用耐心与严谨陪伴学生。角色仅影响交流风格，所有学科知识遵循现实依据。",
     teachingStyle:
-      "语境浸入教学：重视语境与逻辑线索，教学生定位关键词、推理题干；讲解中穿插高频词汇与句型积累，注重答题技巧与思维方法。",
-    speakingStyle: "元气满满，常说“哇你好棒”“我们来找找线索”“这个超常考的”。",
-    voiceId: DEFAULT_VOICE_ID,
-    voiceName: "默认声线",
-    voiceStyle: "[可愛らしく弾んだ口調]",
-    greeting: "你好你好～我是小樱！今天也要元气满满地学习哦！",
+      "先明确目标与依据，再逐步推理；重视理解、实践与反馈。按学生选择的学习计划调整深度，在阅读时关注语境和表达，在解题时关注结构与迁移。",
+    speakingStyle: "沉稳、礼貌、简短直接。鼓励具体，不夸张赞美。",
+    voiceId: "4aa42286f3844a29a243e2ebd29f815f",
+    voiceName: "阿尔托莉雅",
+    voiceStyle: "[落ち着いた誠実で凛とした口調]",
+    greeting: "你好，我是阿尔托莉雅。让我们明确今天的目标，一步一步完成。",
   },
 ];
 
@@ -246,6 +251,14 @@ export function ensureSeed(): Promise<void> {
         .update(tutors)
         .set(PRESET_TUTORS[1])
         .where(and(eq(tutors.isPreset, true), eq(tutors.name, "凛"), eq(tutors.avatar, "/avatars/rin.png")));
+      await db.update(tutors).set(PRESET_TUTORS[3]).where(and(eq(tutors.isPreset, true), eq(tutors.name, "小樱")));
+      for (const preset of PRESET_TUTORS.slice(0, 3)) {
+        const [row] = await db.select().from(tutors).where(and(eq(tutors.isPreset, true), eq(tutors.name, preset.name))).limit(1);
+        if (!row) continue;
+        const personality = row.personality.replace("对物理概念和推导要求严谨", "对概念、证据和推导要求严谨").replace("物理讲解遵循现实科学", "各学科讲解遵循现实依据");
+        const teachingStyle = row.teachingStyle.replace("不打断数学讲解", "不打断学习主线").replace("先建立物理模型，做受力/运动/能量分析，再规范推导", "先建立思考框架，辨明条件与依据，再规范推导");
+        await db.update(tutors).set({ tags: row.tags.filter((tag) => !["数学", "物理", "化学", "英语", "语文"].includes(tag)), tagline: preset.tagline, personality, teachingStyle }).where(eq(tutors.id, row.id));
+      }
     })().catch((e) => {
       seeding = null;
       throw e;
@@ -273,7 +286,6 @@ export function sanitizeTutorInput(body: unknown): TutorInput {
   return {
     name: str("name", 30) || "未命名导师",
     avatar,
-    subject: str("subject", 20) || "数学",
     tags,
     tagline: str("tagline", 80),
     personality: str("personality"),

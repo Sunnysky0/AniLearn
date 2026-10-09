@@ -15,8 +15,10 @@ import { createTagParser, innerTag, stripTags, type TagBlock } from "@/lib/serve
 import { getLLMConfig, getSettings } from "@/lib/server/settings";
 import { tryOperationLock } from "@/lib/server/locks";
 import { acceptCoverage, COVERAGE_LABELS, prepareTutorMessages, recoverCoverage } from "@/lib/server/tutor-output";
-import { COVERAGE_TOPICS, turnIntentForText, type TeachingCoverage, type TurnIntent, type TurnRequest } from "@/lib/types";
+import { PACES, turnIntentForText, type TeachingCoverage, type TurnIntent, type TurnRequest } from "@/lib/types";
 import type { BoardBlock, ProblemProgress, TurnAction, TurnEvent } from "@/lib/types";
+import { fullPlan, goalsFor, goalCovered, missingGoals } from "@/lib/server/learning-plan";
+import { requestPlan, legacyInventory } from "@/lib/server/session-plan";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -49,7 +51,10 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
   }
   const bundle = await loadClassroom(sessionId);
   if (!bundle) { await release(); return Response.json({ error: "课堂不存在" }, { status: 404 }); }
-  const { session, tutor, paper, problems } = bundle;
+  let session: SessionRow = bundle.session;
+  const { tutor, paper, problems } = bundle;
+  let plan = session.plan ?? fullPlan(problems);
+  if (body.planVersion !== undefined && body.planVersion !== plan.version) return Response.json({ error: "学习计划已更新，请确认后重试。" }, { status: 409 });
   if (!problems.length) { await release(); return Response.json({ error: "该试卷还没有解析出题目" }, { status: 400 }); }
 
   let cfg: LLMConfig;
@@ -60,12 +65,25 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
     return Response.json({ error: (e as Error).message }, { status: 400 });
   }
 
-  const idx = Math.min(Math.max(session.currentIdx, 0), problems.length - 1);
-  const problem = problems[idx];
   const text = (typeof body.text === "string" ? body.text : "").trim().slice(0, 4000);
   const intent: TurnIntent | undefined = body.intent === "goodbye" || body.intent === "complete_problem"
     ? body.intent
     : turnIntentForText(text);
+  let changedPlan = false;
+  const requestedPace = PACES.find((p) => text.includes(p.name));
+  const beforeIdx = session.currentIdx;
+  if (!intent && (requestedPace || /只讲|只学|只看|跳过.*题|改为.*档|切换.*档|调整.*节奏|加讲.*题|补讲.*题|讲.*全部题|讲.*所有题|讲.*详细|讲.*快一点|聚焦.*重点|专讲.*难题/.test(text))) {
+    const result = await requestPlan(session, paper.inventory ?? legacyInventory(problems), problems, requestedPace?.id ?? plan.pace, text);
+    session = result.session; plan = session.plan ?? plan; changedPlan = true;
+  }
+  let divider: typeof messages.$inferSelect | undefined;
+  if (changedPlan && beforeIdx !== session.currentIdx) {
+    [divider] = await db.select().from(messages).where(and(eq(messages.sessionId, sessionId), eq(messages.kind, "problem"))).orderBy(desc(messages.id)).limit(1);
+  }
+  const idx = Math.min(Math.max(session.currentIdx, 0), problems.length - 1);
+  const problem = problems[idx];
+  if (!problem.solution && intent !== "goodbye") return Response.json({ error: "当前题尚未解析，请先确认补充解析。" }, { status: 409 });
+  const goals = goalsFor(plan, idx);
   if (body.problemIdx !== undefined && (!Number.isInteger(body.problemIdx) || body.problemIdx < 0 || body.problemIdx >= problems.length)) {
     return Response.json({ error: "题号无效。" }, { status: 400 });
   }
@@ -127,6 +145,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
     history,
     coverage: state.coverage,
     intent,
+    plan,
   });
   const llmMessages = buildTutorMessages({ history, pageImage, problemNumber: problem.number });
 
@@ -150,6 +169,8 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
         }
       };
       if (userRow) send({ type: "user", message: toMessageDTO(userRow) });
+      if (changedPlan) send({ type: "plan", session: toSessionDTO(session) });
+      if (divider) send({ type: "problem", message: toMessageDTO(divider), session: toSessionDTO(session) });
 
       const insertTutorMessage = async (zh: string, ja: string) => {
         const [row] = await db
@@ -232,7 +253,10 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
               message: toMessageDTO(row),
             });
           } else if (b.tag === "covered") {
-            if (intent !== "goodbye") acceptCoverage(state.coverage, b.attrs.topic || "", b.body.trim(), state.taught);
+            if (intent !== "goodbye") {
+              const goal = goals.find((g) => g.topic === b.attrs.topic);
+              if (goal) { const accepted: TeachingCoverage = {}; acceptCoverage(accepted, goal.topic, b.body.trim(), state.taught); if (accepted[goal.topic]) state.coverage[goal.id] = accepted[goal.topic]; }
+            }
           } else if (b.tag === "action") {
             state.actions++;
             const action = (b.body || b.attrs.type || b.attrs.value || "").trim().toLowerCase();
@@ -271,7 +295,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
         }
         const completing = intent !== "goodbye" && (intent === "complete_problem" || finalAction === "next" || finalAction === "finish");
         if ((intent || completing) && parser.stray().trim()) throw new Error("导师回复格式不完整，请重试。");
-        if (completing && !COVERAGE_TOPICS.every((topic) => state.coverage[topic])) {
+        if (completing && missingGoals(plan, idx, state.coverage).length) {
           const savedTeaching = await db
             .select({ content: messages.content })
             .from(messages)
@@ -279,23 +303,25 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
             .orderBy(asc(messages.id));
           const recovered = await recoverCoverage(
             cfg,
-            state.coverage,
+            Object.fromEntries(goals.filter((g) => goalCovered(g, idx, state.coverage)).map((g) => [g.topic, state.coverage[g.id] ?? state.coverage[g.topic]])),
             [...savedTeaching.map((row) => row.content), ...state.blocks.map((block) => block.md), ...state.taught],
             upstream.signal,
+            goals.map((g) => g.topic),
+            goals,
           );
-          Object.assign(state.coverage, recovered);
+          for (const goal of goals) if (recovered[goal.topic]) state.coverage[goal.id] = recovered[goal.topic];
         }
         const coverage = { ...(session.coverage ?? {}), [String(idx)]: state.coverage };
-        const missing = COVERAGE_TOPICS.filter((topic) => !state.coverage[topic]);
+        const missing = missingGoals(plan, idx, state.coverage);
         if (completing && missing.length) {
           finalAction = "wait";
-          await insertTutorMessage(`这题还缺少${missing.map((topic) => COVERAGE_LABELS[topic]).join("、")}的有效讲解记录。我们先补齐，再继续。`, "この問題の解説を最後まで確認してから、次へ進みましょう。");
+          await insertTutorMessage(`这题还缺少${missing.map((goal) => COVERAGE_LABELS[goal.topic]).join("、")}的有效讲解记录。我们先补齐，再继续。`, "この問題の解説を最後まで確認してから、次へ進みましょう。");
         }
         upstream.signal.throwIfAborted();
         let updated: SessionRow = session;
         if (completing && !missing.length) {
           const progress: Record<string, ProblemProgress> = { ...(session.progress ?? {}), [String(idx)]: "done" };
-          const remaining = problems.map((_, i) => i).filter((i) => progress[String(i)] !== "done");
+          const remaining = plan.units.map((unit) => unit.idx).filter((i) => progress[String(i)] !== "done");
           if (remaining.length) {
             finalAction = "next";
             const ni = remaining.find((i) => i > idx) ?? remaining[0];

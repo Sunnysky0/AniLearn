@@ -4,6 +4,7 @@ import { papers, problems } from "@/db/schema";
 import { paperPageMimes, toPaperDTO, visibleProblems } from "@/lib/server/data";
 import { SUBJECTS } from "@/lib/types";
 import { tryOperationLock } from "@/lib/server/locks";
+import { directoryDTO } from "@/lib/server/learning-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,8 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (!row) return Response.json({ error: "试卷不存在" }, { status: 404 });
   const { paper, pageMimes } = row;
   const probs = await db.select().from(problems).where(eq(problems.paperId, id)).orderBy(asc(problems.idx));
-  return Response.json({ paper: toPaperDTO(paper, pageMimes), problems: visibleProblems(paper, probs) });
+  const visible = visibleProblems(paper, probs);
+  return Response.json({ paper: toPaperDTO(paper, pageMimes), problems: visible, directory: directoryDTO(paper.analysisDraft?.inventory ?? paper.inventory, visible) });
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {

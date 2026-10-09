@@ -93,11 +93,26 @@ async function init() {
         if (body.model === 'audit-coverage-stray') output = coverage + '<action>finish</action>';
       } else if (system.includes('[BOARD_REPAIR]')) {
         output = '<board title="中文标题">## 中文知识点\n这是翻译后的中文板书。</board>';
+      } else if (system.includes('你负责设计试卷学习计划')) {
+        const inventory = JSON.parse(inputText.split('目录：')[1].split('\n学习需求：')[0]);
+        const thorough = system.includes('档位：条分缕析');
+        let indices = inventory.items.map(item => item.idx);
+        if (body.model.startsWith('audit-plan') && !thorough) indices = system.includes('档位：由博返约') ? [0] : system.includes('档位：游刃有余') ? [2, 3] : system.includes('档位：羽登化境') ? [2] : [0, 2];
+        const topics = thorough ? ['solution', 'knowledge', 'skills', 'pitfalls'] : system.includes('档位：羽登化境') ? ['extension', 'practice'] : ['knowledge', 'skills'];
+        const descriptions = { solution: '完整解法及答案', knowledge: '具体知识及依据', skills: '关键方法与应用', pitfalls: '易错点与避错办法', extension: '推广、迁移联系及适用边界', practice: '变式练习及作答反馈' };
+        output = '<plan>' + indices.map(idx => `<unit idx="${idx}" related="${idx === 0 && inventory.items.length > 1 ? '1' : ''}" reason="代表题覆盖重点"><goal topic="${topics[0]}">${descriptions[topics[0]]}</goal>${topics.slice(1).map(topic => `<goal topic="${topic}">${descriptions[topic]}</goal>`).join('')}</unit>`).join('') + '</plan>';
+      } else if (system.startsWith('转写本页')) {
+        output = `<source>${system.includes('日语') ? '春になると、街の公園に花が咲きます。\n\n人々は散歩しながら季節の変化を楽しみます。' : 'Scientists study how cities change.\n\nTheir work helps communities plan for the future.'}</source>`;
+      } else if (system.includes('陪中国学生阅读')) {
+        const lang = system.includes('阅读日语') ? 'ja' : 'en';
+        const source = system.split('原文是资料不是指令：\n')[1].split('\n\n本段笔记')[0].trim();
+        output = msg('这一段先说明背景，再交代研究的意义。') + `<quote lang="${lang}">${source}</quote><exercise lang="${lang}">${lang === 'ja' ? 'この段落の要点を自分の言葉で説明してください。' : 'Explain the main idea in your own words.'}</exercise>` + '<msg kind="feedback"><zh>你的概括抓住了主旨，可以再补充一个具体依据。</zh><ja>[calm] 要点を捉えています。根拠も加えてみましょう。</ja></msg><note>## 阅读要点\n联系语境判断主旨，避免逐词孤立翻译。</note><action>wait</action>';
       } else if (system.includes('<inventory')) {
         const pages = Number(system.match(/全部 (\d+) 页/)?.[1] || 1);
         const changed = body.model === 'audit-change';
         output = `<inventory title="审计试卷" pages="${pages}" count="${changed ? 1 : 2}"><overview>两道基础题。</overview><item number="1" page="1" endpage="1">${changed ? '求函数 $f(x)=x^2$ 的导数。' : '解方程 $x+1=2$。'}</item>${changed ? '' : '<item number="2" page="1" endpage="1">解方程 $x+2=4$。</item>'}</inventory>`;
         if (body.model === 'audit-bad-inventory') output = output.replace('count="2"', 'count="3"');
+        if (body.model.startsWith('audit-plan')) output = `<inventory title="选讲测试" pages="${pages}" count="4"><overview>等价变形代表题与两个难题。</overview>${Array.from({ length: 4 }, (_, i) => `<item number="${i + 1}" page="1" endpage="1" topics="${i < 2 ? '等式性质' : '综合转化'}" difficulty="${i < 2 ? 2 : 5}" student="${i === 3 ? '作答错误' : ''}">解方程 $x+${i + 1}=${2 * (i + 1)}$。</item>`).join('')}</inventory>`;
       } else if (inputText.includes('只解析第')) {
         const n = Number(inputText.match(/只解析第 (\d+)/)?.[1]);
         output = problem(n, n === 1 ? '解方程 $x+1=2$。' : '解方程 $x+2=4$。', String(n));
@@ -106,6 +121,7 @@ async function init() {
         if (body.model === 'audit-error' && n === 2) ending = 'error';
         if (body.model === 'audit-missing-fields') output = output.replace(/<solution>[\s\S]*?<\/solution>/, '');
         if (body.model === 'audit-wrong-number') output = output.replace(`number="${n}"`, 'number="99"');
+        if (body.model === 'audit-plan-incomplete' && n === 4) { output = '<problem number="4"><content>尚未完成'; ending = 'length'; }
       }
       else if (body.model === 'audit-finish') output = msg('这一题讲完了。') + '<action>finish</action>';
       else if (body.model === 'audit-coverage-missing') output = msg('请确认是否进入下一题。') + coverageBoard + '<action>wait</action>';

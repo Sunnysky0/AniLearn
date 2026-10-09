@@ -25,6 +25,8 @@ import { PaperSourcePreview } from "@/components/PaperSourcePreview";
 import { PAPER_STATUS } from "@/components/PaperCard";
 import { difficultyStars, formatDate, strategyLabel } from "@/lib/text";
 import type { AnalysisEvent, PaperDTO, ProblemDTO, TutorDTO } from "@/lib/types";
+import { DEFAULT_PACE, type TeachingPace } from "@/lib/types";
+import PacePicker from "@/components/PacePicker";
 
 interface SessionLite {
   id: number;
@@ -53,6 +55,8 @@ export default function PaperView(props: Props) {
   const [picker, setPicker] = useState(false);
   const [tutorId, setTutorId] = useState(props.tutors[0]?.id ?? 0);
   const [creating, setCreating] = useState(false);
+  const [pace, setPace] = useState<TeachingPace>(props.paper.pace ?? DEFAULT_PACE);
+  const [learningRequest, setLearningRequest] = useState("");
   const [open, setOpen] = useState<Set<number>>(new Set());
   const [preview, setPreview] = useState<number | null>(null);
   const started = useRef(false);
@@ -78,7 +82,7 @@ export default function PaperView(props: Props) {
       const res = await fetch(`/api/papers/${paper.id}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ restart }),
+        body: JSON.stringify({ restart, pace }),
       });
       if (res.status === 409) return; // already running elsewhere – polling takes over
       if (!res.ok || !res.body) {
@@ -102,6 +106,7 @@ export default function PaperView(props: Props) {
           else if (ev.type === "status") setPaper((p) => ({ ...p, status: ev.status }));
           else if (ev.type === "problem") setProblems((ps) => [...ps, ev.problem]);
           else if (ev.type === "progress") setChars(ev.chars);
+          else if (ev.type === "inventory") setPaper((p) => ({ ...p, inventory: ev.inventory, analysisPlan: ev.plan }));
           else if (ev.type === "error") setError(ev.error);
         }
       }
@@ -141,7 +146,7 @@ export default function PaperView(props: Props) {
       const r = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paperId: paper.id, tutorId }),
+        body: JSON.stringify({ paperId: paper.id, tutorId, pace, request: learningRequest }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "创建课堂失败");
@@ -188,6 +193,7 @@ export default function PaperView(props: Props) {
           <h1 className="text-[32px] font-bold text-neutral-900">{paper.title}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-neutral-500">
             <span className="bg-neutral-100 px-2 py-0.5 text-neutral-800">{paper.subject}</span>
+            <span>已解析 {problems.filter((p) => p.analysis !== "unparsed").length} / {paper.inventory?.items.length ?? problems.length} 题</span>
             <span className={` px-2.5 py-0.5 text-xs font-medium ${st.cls}`}>{st.label}</span>
             <span>{paper.pageCount} 页</span>
             <span>·</span>
@@ -296,13 +302,14 @@ export default function PaperView(props: Props) {
         </aside>
 
         <section className="min-w-0 space-y-4">
+          {paper.analysisPlan && <div className="border-t-2 border-neutral-900 py-5"><h2 className="font-semibold">初始学习计划</h2><div className="mt-3 divide-y divide-neutral-200">{paper.analysisPlan.units.map((unit) => <div key={unit.idx} className="py-3"><div className="text-sm font-semibold">第 {problems[unit.idx]?.number ?? unit.idx + 1} 题{unit.related.length > 0 && <span className="ml-2 font-normal text-neutral-500">关联：{unit.related.map((idx) => `第${problems[idx]?.number ?? idx + 1}题`).join("、")}</span>}</div><p className="mt-1 text-xs text-neutral-500">{unit.reason}</p><ul className="mt-2 list-inside list-disc text-sm">{unit.goals.map((goal) => <li key={goal.id}>{goal.description}</li>)}</ul></div>)}</div></div>}
           {(running || analyzing) && (
             <div className="flex items-center gap-4 bg-neutral-900 p-5 text-white">
               <div className="flex h-12 w-12 items-center justify-center bg-white/10">
                 <ScanSearch className="h-6 w-6 animate-pulse" />
               </div>
               <div className="flex-1">
-                <div className="font-semibold">AI 正在逐题解析试卷…</div>
+                <div className="font-semibold">AI 正在解析计划选中的题目…</div>
                 <div className="mt-0.5 text-sm text-neutral-200/80">
                   已识别 {problems.length} 道题{chars ? ` · 已生成 ${chars.toLocaleString()} 字` : ""} ·
                   识别题目、标注关键点与教材知识点
@@ -404,8 +411,10 @@ export default function PaperView(props: Props) {
                   </ul>
                 </div>
               )}
+              {p.analysis === "unparsed" && <p className="mt-3 text-sm text-neutral-500">未深入解析 · 未纳入初始讲解范围</p>}
               <button
                 onClick={() => toggle(p.id)}
+                disabled={p.analysis === "unparsed"}
                 className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-neutral-800 hover:text-neutral-800"
               >
                 {open.has(p.id) ? "收起答案与解析" : "查看答案与解析"}
@@ -463,12 +472,14 @@ export default function PaperView(props: Props) {
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-bold text-neutral-900">选择你的 AI 导师</h3>
-                <p className="text-sm text-neutral-500">导师会以自己的性格与教学风格，陪你逐题讲透这张试卷。</p>
+                <p className="text-sm text-neutral-500">选择本次学习的导师与目标。</p>
               </div>
               <button onClick={() => setPicker(false)} className="p-2 text-neutral-500 hover:bg-neutral-100">
                 <X className="h-5 w-5" />
               </button>
             </div>
+            <div className="mt-4"><PacePicker value={pace} onChange={setPace} disabled={creating} /></div>
+            <label className="mt-3 block text-sm">学习需求<textarea aria-label="开课学习需求" value={learningRequest} onChange={(e) => setLearningRequest(e.target.value)} maxLength={2000} disabled={creating} className="mt-1 min-h-20 w-full border border-neutral-300 p-2" /></label>
             <div className="mt-5 grid max-h-[55vh] gap-3 overflow-y-auto thin-scroll sm:grid-cols-2">
               {props.tutors.map((t) => (
                 <button

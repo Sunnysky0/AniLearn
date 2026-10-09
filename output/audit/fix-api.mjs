@@ -18,7 +18,7 @@ async function model(name, target = 'chatModel') {
   assert.equal((await api('/api/settings', 'PUT', { provider: 'openai', providers: { openai: { apiKey: 'audit-dummy-key-only', baseUrl: 'http://127.0.0.1:4107/v1', [target]: name } } })).status, 200);
 }
 async function paper() {
-  const p = (await api('/api/papers', 'POST', { title: '修复回归试卷', subject: '数学' })).value;
+  const p = (await api('/api/papers', 'POST', { title: '修复回归试卷', subject: '数学', pace: 'thorough' })).value;
   const dataUrl = 'data:image/png;base64,' + fs.readFileSync('public/avatars/darjeeling.png').toString('base64');
   assert.equal((await api(`/api/papers/${p.id}/pages`, 'POST', { dataUrl })).status, 200);
   return p.id;
@@ -55,7 +55,7 @@ for (const name of ['audit-incomplete', 'audit-error', 'audit-bad-inventory', 'a
   assert.equal(done(events), undefined);
   assert.equal((await api('/api/sessions', 'POST', { paperId: id, tutorId: 1 })).status, 400);
   if (['audit-incomplete', 'audit-error'].includes(name)) {
-    assert.equal(data.problems.length, 1);
+    assert.equal(data.problems.filter(p => p.analysis !== 'unparsed').length, 1);
     const before = (await (await fetch('http://127.0.0.1:4107/requests')).json()).length;
     assert.ok(done(await analyze(id)));
     const requests = (await (await fetch('http://127.0.0.1:4107/requests')).json()).slice(before);

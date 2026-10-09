@@ -23,6 +23,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (!Number.isInteger(idx) || idx < 0 || idx >= bundle.problems.length) {
     return Response.json({ error: "题号无效" }, { status: 400 });
   }
+  if (bundle.session.plan && !bundle.session.plan.units.some((unit) => unit.idx === idx)) return Response.json({ error: "此题未纳入本课，请先调整学习计划。" }, { status: 409 });
   const progress: Record<string, ProblemProgress> = { ...bundle.session.progress };
   if (progress[String(idx)] !== "done") progress[String(idx)] = "active";
   const [s] = await db

@@ -1,4 +1,5 @@
 // Text helpers shared by client & server.
+import { prepareMathMarkdown, scanMarkdownCode, scanMarkdownMath } from "./math-markdown";
 
 /**
  * Split markdown into "reveal tokens" for the typewriter effect.
@@ -7,19 +8,22 @@
  */
 export function tokenizeForReveal(md: string): string[] {
   const out: string[] = [];
-  const re =
-    /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\*\*[^*\n]+?\*\*|!?\[[^\]\n]*\]\([^)\n]*\))/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(md))) {
-    if (m.index > last) {
-      for (const ch of Array.from(md.slice(last, m.index))) out.push(ch);
+  const formulas = new Map(scanMarkdownMath(md).map((span) => [span.start, span.end]));
+  const codes = new Map(scanMarkdownCode(md).map((span) => [span.start, span.end]));
+  const markup = /\*\*[^*\n]+?\*\*|!?\[[^\]\n]*\]\([^)\n]*\)/y;
+  for (let index = 0; index < md.length;) {
+    markup.lastIndex = index;
+    const atom = markup.exec(md);
+    const escape = md[index] === "\\" && /[\\`*{}[\]()#+\-.!_$>~|]/.test(md[index + 1] ?? "");
+    const end = codes.get(index) ?? formulas.get(index) ?? (atom ? index + atom[0].length : escape ? index + 2 : undefined);
+    if (end !== undefined) {
+      out.push(md.slice(index, end));
+      index = end;
+    } else {
+      const ch = String.fromCodePoint(md.codePointAt(index)!);
+      out.push(ch);
+      index += ch.length;
     }
-    out.push(m[0]);
-    last = m.index + m[0].length;
-  }
-  if (last < md.length) {
-    for (const ch of Array.from(md.slice(last))) out.push(ch);
   }
   return out;
 }
@@ -72,9 +76,7 @@ export function isJapaneseSpeech(text: string): boolean {
 
 /** Convert \( \) and \[ \] delimiters into $ / $$ so remark-math can parse them. */
 export function normalizeMath(s: string): string {
-  return s
-    .replace(/\\\[([\s\S]+?)\\\]/g, (_m, inner: string) => `\n$$${inner}$$\n`)
-    .replace(/\\\(([\s\S]+?)\\\)/g, (_m, inner: string) => `$${inner}$`);
+  return prepareMathMarkdown(s).content;
 }
 
 export function difficultyStars(n: number): string {

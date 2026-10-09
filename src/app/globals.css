@@ -248,13 +248,40 @@ input[type="radio"] {
   border-top: 1px solid #c8c8c8;
   margin: 0.8em 0;
 }
-.md .katex-display,
-.chalk .katex-display {
+.math-markdown {
+  min-width: 0;
+  max-width: 100%;
+}
+.math-markdown .katex {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.math-markdown .math-inline {
+  display: inline-flex;
+  max-width: 100%;
+  vertical-align: baseline;
+}
+.math-markdown .math-scroll {
+  display: block;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25em 0;
+  margin: -0.25em 0;
+}
+.math-markdown .math-inline .katex-html {
+  white-space: nowrap;
+}
+.math-markdown .katex-display {
   margin: 0.5em 0;
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 0.2em 0;
+  padding: 0.3em 0;
+}
+.math-markdown .katex-display > .katex {
+  width: max-content;
+  min-width: 100%;
 }
 .md .katex {
   font-size: 1.05em;

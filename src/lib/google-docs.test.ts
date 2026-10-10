@@ -3,11 +3,12 @@ import { test } from "node:test";
 import {
   extractGoogleDocsUrl,
   GOOGLE_DOC_EXPORT_MAX_BYTES,
+  GOOGLE_DOC_MARKDOWN_MAX_BYTES,
   isAllowedGoogleDocsRedirect,
   parseGoogleDocsUrl,
   safeGoogleDocsFilename,
 } from "./google-docs";
-import { exportGoogleDocsPdf, GoogleDocsImportError } from "./server/google-docs";
+import { exportGoogleDocs, exportGoogleDocsPdf, GoogleDocsImportError } from "./server/google-docs";
 
 const documentId = "1xYzabcdefghijkLMNOPqrstuvwxyz0123456789";
 const shareUrl = `https://docs.google.com/document/d/${documentId}/edit?usp=sharing`;
@@ -51,6 +52,65 @@ test("export requests PDF for every tab and returns only verified PDF content", 
   assert.equal(pdf.filename, "Math paper.pdf");
 });
 
+test("Google Docs import prefers verified Markdown and returns a text source", async () => {
+  const captured: { requested?: URL; accept?: string } = {};
+  const markdown = new TextEncoder().encode("# Article\n\nFirst paragraph.");
+  const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    captured.requested = new URL(String(input));
+    captured.accept = new Headers(init?.headers).get("accept") ?? undefined;
+    return new Response(markdown, {
+      headers: { "Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": "attachment; filename*=UTF-8''Foreign%20Article.md" },
+    });
+  }) as typeof fetch;
+  const result = await exportGoogleDocs(`https://docs.google.com/document/d/${documentId}/edit?resourcekey=key_123&tab=t.0`, fetcher, AbortSignal.timeout(1000));
+  assert.equal(captured.requested?.searchParams.get("format"), "md");
+  assert.equal(captured.requested?.searchParams.has("tab"), false);
+  assert.equal(captured.requested?.searchParams.get("resourcekey"), "key_123");
+  assert.equal(captured.accept, "text/markdown");
+  assert.equal(result.mimeType, "text/markdown");
+  assert.equal(result.filename, "Foreign Article.md");
+  assert.deepEqual(result.bytes, markdown);
+});
+
+test("Google Docs import falls back to PDF when public Markdown export is unavailable or too large", async () => {
+  const formats: string[] = [];
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const format = new URL(String(input)).searchParams.get("format") ?? "";
+    formats.push(format);
+    if (format === "md") return new Response("<html>Markdown export unavailable</html>", { headers: { "Content-Type": "text/html" } });
+    return new Response(pdfData, { headers: { "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=Article.pdf" } });
+  }) as typeof fetch;
+  const result = await exportGoogleDocs(shareUrl, fetcher, AbortSignal.timeout(1000));
+  assert.deepEqual(formats, ["md", "pdf"]);
+  assert.equal(result.mimeType, "application/pdf");
+  assert.equal(result.filename, "Article.pdf");
+  assert.deepEqual(result.bytes, pdfData);
+
+  formats.length = 0;
+  const oversizedMarkdown = (async (input: RequestInfo | URL) => {
+    const format = new URL(String(input)).searchParams.get("format") ?? "";
+    formats.push(format);
+    if (format === "md") return new Response("ignored", { headers: { "Content-Length": String(GOOGLE_DOC_MARKDOWN_MAX_BYTES + 1) } });
+    return new Response(pdfData, { headers: { "Content-Type": "application/pdf" } });
+  }) as typeof fetch;
+  const fallback = await exportGoogleDocs(shareUrl, oversizedMarkdown, AbortSignal.timeout(1000));
+  assert.deepEqual(formats, ["md", "pdf"]);
+  assert.equal(fallback.mimeType, "application/pdf");
+});
+
+test("Markdown export does not fall back through an untrusted redirect", async () => {
+  const formats: string[] = [];
+  const fetcher = (async (input: RequestInfo | URL) => {
+    formats.push(new URL(String(input)).searchParams.get("format") ?? "");
+    return new Response(null, { status: 302, headers: { location: "https://docs.google.com.evil.test/download" } });
+  }) as typeof fetch;
+  await assert.rejects(
+    exportGoogleDocs(shareUrl, fetcher, AbortSignal.timeout(1000)),
+    (error: unknown) => error instanceof GoogleDocsImportError && error.status === 400,
+  );
+  assert.deepEqual(formats, ["md"]);
+});
+
 test("export refuses authentication pages and external redirect destinations", async () => {
   await assert.rejects(
     exportGoogleDocsPdf(shareUrl, fetchResponse(200, { "content-type": "text/html" }, "<html>login</html>"), AbortSignal.timeout(1000)),
@@ -79,6 +139,7 @@ test("export enforces redirect and byte limits, and sanitizes the returned filen
     (error: unknown) => error instanceof GoogleDocsImportError && error.status === 413,
   );
   assert.equal(safeGoogleDocsFilename('attachment; filename="..\\private\\paper"'), "paper.pdf");
+  assert.equal(safeGoogleDocsFilename("attachment; filename*=UTF-8''paper.pdf", ".md"), "paper.md");
   assert.equal(safeGoogleDocsFilename("attachment; filename*=UTF-8''bad%ZZ"), "Google Docs 文档.pdf");
 });
 

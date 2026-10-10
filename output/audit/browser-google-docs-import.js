@@ -13,6 +13,15 @@ async (page) => {
   await page.route('**/api/import/google-doc', async route => {
     requestCount++;
     lastRequest = route.request().postDataJSON();
+    if (lastRequest.url.includes('&markdown=true')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/markdown; charset=utf-8',
+        headers: { 'X-File-Name': encodeURIComponent('外刊原文.md') },
+        body: '# Article\n\nMarkdown import skips image OCR.',
+      });
+      return;
+    }
     const path = lastRequest.url.includes('oversized=true') ? 'output/audit/seventeen-pages.pdf' : 'output/audit/two-pages.pdf';
     await route.fulfill({ status: 200, contentType: 'application/pdf', headers: { 'X-File-Name': encodeURIComponent('导入试卷.pdf') }, path });
   });
@@ -98,6 +107,23 @@ async (page) => {
   await page.getByRole('button', { name: '导入链接', exact: true }).click();
   await page.getByText('共 17 个来源页 · 不限页数', { exact: true }).waitFor({ timeout: 180000 });
   results.push({ test: 'reading Google Docs export accepts an article beyond the exam paper limit', outcome: 'pass' });
+
+  await page.goto(base + '/readings/new');
+  await page.getByLabel('Google Docs 链接').fill(documentUrl + '&markdown=true');
+  await page.getByRole('button', { name: '导入链接', exact: true }).click();
+  await page.getByText('共 1 个来源页 · 不限页数', { exact: true }).waitFor();
+  ensure(await page.getByText('1. 外刊原文.md', { exact: true }).count() === 1, 'Markdown Docs export was not staged as a text source');
+  const modelRequestsBeforeMarkdownUpload = (await (await page.request.get('http://127.0.0.1:4107/requests')).json()).length;
+  await page.getByRole('button', { name: '上传文章并自动识别', exact: true }).click();
+  await page.getByText('识别完成，请校对后确认', { exact: true }).waitFor({ timeout: 30000 });
+  await page.waitForFunction(() => document.querySelector('textarea[aria-label="当前页校对原文"]')?.value.includes('Markdown import skips image OCR.'));
+  const recognizedMarkdown = await page.getByLabel('当前页校对原文').inputValue();
+  const normalizedMarkdown = recognizedMarkdown.replace(/\r\n?/g, '\n').trim();
+  const expectedMarkdown = '# Article\n\nMarkdown import skips image OCR.';
+  ensure(normalizedMarkdown === expectedMarkdown, `Markdown source was not preserved as article text: ${JSON.stringify(normalizedMarkdown)}`);
+  const modelRequestsAfterMarkdownUpload = (await (await page.request.get('http://127.0.0.1:4107/requests')).json()).length;
+  ensure(modelRequestsAfterMarkdownUpload === modelRequestsBeforeMarkdownUpload, 'Direct Markdown reading unexpectedly called a model');
+  results.push({ test: 'reading Google Docs Markdown export uploads as text and bypasses OCR model calls', outcome: 'pass' });
 
   await page.goto(base + '/papers/new');
   const keyboardUrl = documentUrl + '&source=clipboard';

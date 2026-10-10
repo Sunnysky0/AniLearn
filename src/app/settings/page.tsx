@@ -257,7 +257,7 @@ export default function SettingsPage() {
             </div>
           </div>
           <div>
-            <label htmlFor="fish-proxy" className="text-sm font-semibold text-neutral-700">代理地址（可选）</label>
+            <label htmlFor="fish-proxy" className="text-sm font-semibold text-neutral-700">代理地址（Fish Audio 与 Google Docs，可选）</label>
             <div className="mt-2 flex gap-2">
               <input
                 id="fish-proxy"
@@ -271,9 +271,10 @@ export default function SettingsPage() {
               {s?.fish.hasProxy && (
                 <button onClick={() => void save({ fish: { proxyUrl: null } })} disabled={saving || ttsTest.loading}
                   className="shrink-0 border border-neutral-200 px-3 text-sm text-neutral-500 hover:text-neutral-800"
-                  aria-label="清除 Fish Audio 代理">清除</button>
+                  aria-label="清除 Fish Audio 与 Google Docs 代理">清除</button>
               )}
             </div>
+            <p className="mt-1 text-xs text-neutral-500">服务器也可通过 GOOGLE_DOCS_PROXY_URL 或 HTTPS_PROXY 环境变量配置 Google Docs 代理。</p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <button

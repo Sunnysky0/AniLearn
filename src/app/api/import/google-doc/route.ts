@@ -1,5 +1,6 @@
-import { GOOGLE_DOC_EXPORT_TIMEOUT_MS, safeGoogleDocsFilename } from "@/lib/google-docs";
-import { exportGoogleDocsPdf, GoogleDocsImportError } from "@/lib/server/google-docs";
+import { GOOGLE_DOC_EXPORT_TIMEOUT_MS } from "@/lib/google-docs";
+import { getSettings } from "@/lib/server/settings";
+import { exportGoogleDocs, GoogleDocsImportError, resolveGoogleDocsProxy } from "@/lib/server/google-docs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,16 +28,18 @@ export async function POST(req: Request) {
 
   try {
     const signal = AbortSignal.any([req.signal, AbortSignal.timeout(GOOGLE_DOC_EXPORT_TIMEOUT_MS)]);
-    const pdf = await exportGoogleDocsPdf(body.url, fetch, signal);
-    const safeName = safeGoogleDocsFilename(`filename*=UTF-8''${encodeURIComponent(pdf.filename)}`);
-    const bodyBuffer = new ArrayBuffer(pdf.bytes.byteLength);
-    new Uint8Array(bodyBuffer).set(pdf.bytes);
+    const settings = await getSettings();
+    const proxyUrl = resolveGoogleDocsProxy(settings.fish.proxyUrl);
+    const document = await exportGoogleDocs(body.url, fetch, signal, proxyUrl);
+    const bodyBuffer = new ArrayBuffer(document.bytes.byteLength);
+    new Uint8Array(bodyBuffer).set(document.bytes);
+    const extension = document.mimeType === "text/markdown" ? ".md" : ".pdf";
     return new Response(bodyBuffer, {
       headers: {
-        "Content-Type": "application/pdf",
-        "Content-Length": String(pdf.bytes.byteLength),
-        "Content-Disposition": `attachment; filename="google-doc.pdf"; filename*=UTF-8''${encodeURIComponent(safeName)}`,
-        "X-File-Name": encodeURIComponent(safeName),
+        "Content-Type": document.mimeType === "text/markdown" ? "text/markdown; charset=utf-8" : "application/pdf",
+        "Content-Length": String(document.bytes.byteLength),
+        "Content-Disposition": `attachment; filename="google-doc${extension}"; filename*=UTF-8''${encodeURIComponent(document.filename)}`,
+        "X-File-Name": encodeURIComponent(document.filename),
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
       },
@@ -44,7 +47,7 @@ export async function POST(req: Request) {
   } catch (error) {
     if (req.signal.aborted) return Response.json({ error: "导入已取消。" }, { status: 499 });
     if (error instanceof GoogleDocsImportError) return Response.json({ error: error.message }, { status: error.status });
-    if (isConnectionTimeout(error)) return Response.json({ error: "连接 Google Docs 超时，请稍后重试。" }, { status: 504 });
+    if (isConnectionTimeout(error)) return Response.json({ error: "连接 Google Docs 超时，请检查服务器网络或代理设置后重试。" }, { status: 504 });
     return Response.json({ error: "读取 Google Docs 失败，请确认文档公开且允许导出。" }, { status: 502 });
   }
 }

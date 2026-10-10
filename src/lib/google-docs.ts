@@ -1,4 +1,7 @@
+import { MAX_PAPER_TEXT_BYTES } from "./types";
+
 export const GOOGLE_DOC_EXPORT_MAX_BYTES = 20 * 1024 * 1024;
+export const GOOGLE_DOC_MARKDOWN_MAX_BYTES = MAX_PAPER_TEXT_BYTES;
 export const GOOGLE_DOC_EXPORT_TIMEOUT_MS = 30_000;
 export const GOOGLE_DOC_MAX_REDIRECTS = 5;
 
@@ -45,7 +48,8 @@ export function isAllowedGoogleDocsRedirect(value: string): boolean {
   return url.hostname === "docs.google.com" || url.hostname === "drive.google.com" || url.hostname === "drive.usercontent.google.com" || url.hostname.endsWith(".googleusercontent.com");
 }
 
-export function safeGoogleDocsFilename(value: string | null, fallback = "Google Docs 文档.pdf"): string {
+export function safeGoogleDocsFilename(value: string | null, extension: ".pdf" | ".md" = ".pdf"): string {
+  const fallback = `Google Docs 文档${extension}`;
   if (!value) return fallback;
   const encoded = value.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1];
   let filename = "";
@@ -56,6 +60,6 @@ export function safeGoogleDocsFilename(value: string | null, fallback = "Google 
   }
   filename = filename.split(/[\\/]/).at(-1)?.replace(/[\x00-\x1f\x7f]/g, "").trim() ?? "";
   if (!filename) return fallback;
-  if (!/\.pdf$/i.test(filename)) filename += ".pdf";
-  return filename.slice(0, 240);
+  const base = filename.replace(/\.[^.]+$/, "").trim();
+  return `${base || "Google Docs 文档"}${extension}`.slice(0, 240);
 }

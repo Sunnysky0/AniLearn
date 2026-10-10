@@ -1,29 +1,16 @@
-import { ProxyAgent } from "undici";
 import type { FishApiError } from "@/lib/types";
+import { createProxyAgent, httpProxyPreview, normalizeHttpProxy } from "./http-proxy";
 
 export function normalizeFishProxy(value: string): string {
-  const input = value.trim();
-  if (!input) return "";
   try {
-    const url = new URL(input);
-    if (!["http:", "https:"].includes(url.protocol) || !url.hostname ||
-      url.pathname !== "/" || url.search || url.hash) throw new Error();
-    decodeURIComponent(url.username);
-    decodeURIComponent(url.password);
-    return url.href;
+    return normalizeHttpProxy(value);
   } catch {
     throw new Error("代理地址必须为有效的 HTTP/HTTPS 地址，例如 http://127.0.0.1:18081，不得包含路径、查询参数或片段。");
   }
 }
 
 export function fishProxyPreview(value: string): string {
-  if (!value) return "";
-  try {
-    const url = new URL(value);
-    return `${url.protocol}//${url.username || url.password ? "***@" : ""}${url.host}`;
-  } catch {
-    return "已配置";
-  }
+  return httpProxyPreview(value);
 }
 
 export class FishRequestError extends Error {
@@ -114,20 +101,12 @@ export async function fishRequest<T>(
   init: RequestInit,
   read: (response: Response) => Promise<T>,
 ): Promise<T> {
-  let agent: ProxyAgent | undefined;
+  let agent: ReturnType<typeof createProxyAgent> | undefined;
   try {
-    if (config.proxyUrl) {
-      const url = new URL(normalizeFishProxy(config.proxyUrl));
-      const token = url.username || url.password
-        ? `Basic ${Buffer.from(`${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`).toString("base64")}`
-        : undefined;
-      url.username = "";
-      url.password = "";
-      agent = new ProxyAgent({ uri: url.href, token });
-    }
+    if (config.proxyUrl) agent = createProxyAgent(config.proxyUrl);
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${config.key}`);
-    const options: RequestInit & { dispatcher?: ProxyAgent } = {
+    const options: RequestInit & { dispatcher?: ReturnType<typeof createProxyAgent> } = {
       ...init, headers, cache: "no-store", ...(agent ? { dispatcher: agent } : {}),
     };
     const response = await fetch(`https://api.fish.audio${path}`, options);

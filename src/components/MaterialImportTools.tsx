@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ClipboardPaste, Link2, Loader2 } from "lucide-react";
-import { extractGoogleDocsUrl, GOOGLE_DOC_EXPORT_MAX_BYTES } from "@/lib/google-docs";
+import { extractGoogleDocsUrl, GOOGLE_DOC_EXPORT_MAX_BYTES, GOOGLE_DOC_MARKDOWN_MAX_BYTES } from "@/lib/google-docs";
 import { MAX_PAPER_PAGES } from "@/lib/types";
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
@@ -79,14 +79,20 @@ export function MaterialImportTools({ pageCount, maxPages = MAX_PAPER_PAGES, dis
         throw new Error(data?.error || "Google Docs 导入失败。");
       }
       const blob = await response.blob();
-      if (blob.size > GOOGLE_DOC_EXPORT_MAX_BYTES) throw new Error("导出的 PDF 超过 20 MB，请压缩文档后重试。");
-      if (blob.type !== "application/pdf" || blob.size < 5) throw new Error("Google Docs 返回的内容不是有效 PDF。");
+      const mime = blob.type.split(";")[0].trim().toLowerCase();
+      if (mime === "application/pdf" && blob.size > GOOGLE_DOC_EXPORT_MAX_BYTES) throw new Error("导出的 PDF 超过 20 MB，请压缩文档后重试。");
+      if (mime === "text/markdown" && blob.size > GOOGLE_DOC_MARKDOWN_MAX_BYTES) throw new Error("Google Docs 导出的 Markdown 超过 1.5 MB。");
+      if (!((mime === "application/pdf" && blob.size >= 5) || (mime === "text/markdown" && blob.size > 0))) {
+        throw new Error("Google Docs 返回的内容不是有效的 PDF 或 Markdown。");
+      }
       const encodedName = response.headers.get("x-file-name");
-      let filename = "Google Docs 文档.pdf";
+      const extension = mime === "text/markdown" ? ".md" : ".pdf";
+      let filename = `Google Docs 文档${extension}`;
       if (encodedName) {
         try { filename = decodeURIComponent(encodedName); } catch { /* Use the fallback filename. */ }
       }
-      await onFilesRef.current([new File([blob], filename, { type: "application/pdf" })]);
+      if (!filename.toLowerCase().endsWith(extension)) filename = `${filename.replace(/\.[^.]+$/, "")}${extension}`;
+      await onFilesRef.current([new File([blob], filename, { type: mime })]);
       setUrl("");
     } catch (cause) {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Google Docs 导入失败。");
@@ -191,7 +197,7 @@ export function MaterialImportTools({ pageCount, maxPages = MAX_PAPER_PAGES, dis
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-neutral-800">剪贴板与 Google Docs</h2>
-          <p className="mt-1 text-xs text-neutral-500">可粘贴图片或公开共享的 Google Docs 链接 · {Number.isFinite(maxPages) ? `已添加 ${pageCount}/${maxPages} 页` : `已添加 ${pageCount} 页`}</p>
+          <p className="mt-1 text-xs text-neutral-500">可粘贴图片或公开共享的 Google Docs 链接；链接优先导入 Markdown，必要时回退 PDF · {Number.isFinite(maxPages) ? `已添加 ${pageCount}/${maxPages} 页` : `已添加 ${pageCount} 页`}</p>
         </div>
         <button type="button" onClick={() => void readClipboard()} disabled={disabled || busy || pageCount >= maxPages} className="flex items-center gap-2 border border-neutral-300 px-3 py-2 text-sm hover:border-neutral-800 disabled:cursor-not-allowed disabled:opacity-40">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardPaste className="h-4 w-4" />}

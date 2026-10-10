@@ -14,8 +14,9 @@ export function matchesRecord(identity: ProcessIdentity, record: ProcessRecord, 
   return record.root?.toLowerCase() === path.resolve(root).toLowerCase() && record.pid === identity.pid && record.created === identity.created && record.commandHash === recordProcess(identity, root).commandHash;
 }
 export async function powershell(script: string) {
-  const encoded = Buffer.from("$ErrorActionPreference='Stop'; " + script, 'utf16le').toString('base64');
-  const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { windowsHide: true, timeout: 15_000, maxBuffer: 4_000_000 });
+  // Windows PowerShell's default encoding can turn smart quotes into unescaped JSON quotes.
+  const encoded = Buffer.from("$ErrorActionPreference='Stop'; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); " + script, 'utf16le').toString('base64');
+  const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { windowsHide: true, encoding: 'utf8', timeout: 15_000, maxBuffer: 4_000_000 });
   return stdout.trim();
 }
 export async function processes(): Promise<ProcessIdentity[]> {

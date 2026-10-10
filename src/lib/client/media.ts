@@ -83,13 +83,14 @@ export async function pdfToImages(
   file: File,
   onProgress?: (done: number, total: number) => void,
   maxPages = MAX_PAPER_PAGES,
+  pageLimitMessage = `单份试卷最多 ${maxPages} 页`,
 ): Promise<string[]> {
   const pdfjs = await loadPdfJs();
   const task = pdfjs.getDocument({ data: await file.arrayBuffer() });
   try {
   const doc = await task.promise;
   if (doc.numPages > maxPages) {
-    throw new Error(`PDF 共 ${doc.numPages} 页，单份试卷最多 ${maxPages} 页。请拆分后上传，页面不会被截断。`);
+    throw new Error(`PDF 共 ${doc.numPages} 页，${pageLimitMessage}。请拆分后上传，页面不会被截断。`);
   }
   const total = doc.numPages;
   const out: string[] = [];

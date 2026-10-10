@@ -64,6 +64,7 @@ src/
   lib/text.ts          math normalize, atomic reveal, short-message splitting, language checks
   lib/client/media.ts  JPEG downscale, PDF→image (pdfjs in /public/pdfjs)
   lib/server/
+    google-docs.ts    Google Docs public PDF export with redirect and size limits
     llm.ts             OpenAI-compat / Anthropic / Gemini streaming
     analysis.ts        inventory and complete-problem validation
     prompts.ts         inventory + analysis + tutor system prompts
@@ -79,6 +80,7 @@ API (all `force-dynamic`):
 | Path | Role |
 | --- | --- |
 | `POST /api/papers` then `POST /api/papers/:id/pages` | Create paper; append images or UTF-8 Markdown/LaTeX sources as base64 data URLs. PDF is rasterized in the browser first. Each text file is one source page (max 1.5 MB). |
+| `POST /api/import/google-doc` | Fetch a public Google Docs document as a PDF with all tabs; validates every redirect and limits the response to 20 MB. Does not create a material record. |
 | `POST /api/papers/:id/analyze` | Inventory then per-problem vision analysis, streamed as NDJSON `AnalysisEvent`. Body `{ restart?: boolean }`; default resumes saved draft. Continues after browser disconnect. |
 | `PATCH/DELETE /api/papers/:id` | Edit/delete under the paper lock. Subject cannot change after publication or while a draft exists. |
 | `POST /api/sessions` | Start classroom (`paperId` + `tutorId`). Requires complete, error-free `ready` paper; saves snapshot in a transaction. |
@@ -134,6 +136,8 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 - `goodbye` preserves progress and suppresses board work, completion and automatic continuation. The return-home control unlocks only after a successful done, normal stream EOF, and the entire playback/reveal queue is idle; cancellation or failure must not unlock it. Goodbye state is page-local; retry retains intent.
 - Sessions keep a paper/problem snapshot. Paper and session mutations use separate PostgreSQL advisory-lock connections, including across app processes.
 - PDF, upload UI and server share `MAX_PAPER_PAGES = 12`; oversized PDFs are rejected explicitly.
+- Paper and reading uploads accept pasted images and public Google Docs links. The shared import control reads one preferred image representation per clipboard item; Google Docs export imports all tabs as PDF pages and goes through the existing review flow. Text-entry controls keep their normal paste behavior. Imports are staged atomically and all source pages, including pasted reading text, count toward the 12-page limit.
+- Google Docs imports require public access and export permission, use no Google login, and time out after 30 seconds. Export requests are restricted to Docs document links, allow at most five redirects to Google export hosts, and cap the PDF at 20 MiB. No document source is stored until the user submits the upload form.
 - Client pump (`Classroom.tsx`): play each `message` (TTS + reveal), then apply `board` / `problem` / `done`. User may interrupt; pending input flushes the queue.
 
 ## Message and voice handling
@@ -179,6 +183,7 @@ npm run build        # next build
 npm run start        # next start (requires a completed build)
 npm run lint
 npm run typecheck    # tsc --noEmit
+npm run google-docs:test # link validation and Google Docs export safety checks
 npm run launcher     # Windows full-screen TUI; auto-start app and PostgreSQL
 npm run launcher:test # launcher core and terminal-layout regression tests
 codegraph sync       # update the code index after code changes

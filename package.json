@@ -8,6 +8,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "math:test": "tsx --test src/lib/math-markdown.test.ts src/components/Markdown.test.tsx",
+    "google-docs:test": "node --import tsx --test src/lib/google-docs.test.ts",
     "db:up": "docker compose --env-file .env.local up -d --wait",
     "db:down": "docker compose --env-file .env.local down",
     "db:status": "docker compose --env-file .env.local ps",

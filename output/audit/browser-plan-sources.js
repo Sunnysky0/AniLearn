@@ -110,7 +110,7 @@ async (page) => {
   }
   await page.goto(base + '/readings/new');
   await page.locator('input[type=file]').setInputFiles('output/audit/seventeen-pages.pdf');
-  await page.getByText(/PDF 共 17 页，单份试卷最多 12 页/).waitFor();
+  await page.getByText(/PDF 共 17 页，每篇文章最多 12 个来源页/).waitFor();
   ensure(await page.getByRole('button', { name: '上传文章', exact: true }).isDisabled(), 'Oversized article accepted');
   results.push({ test: 'reading PDF page limit rejects oversized source', outcome: 'pass' });
   ensure(errors.length === 0, errors.join('\n'));

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ChevronLeft, ChevronRight, FileUp, Loader2, Sparkles, Trash2, UploadCloud } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
+import { MaterialImportTools } from "@/components/MaterialImportTools";
 import { fileToJpegDataUrl, fileToPaperText, pdfToImages } from "@/lib/client/media";
 import { paperTextFormat } from "@/lib/paper-source";
 import { MAX_PAPER_PAGES, SUBJECTS } from "@/lib/types";
@@ -36,37 +37,45 @@ export default function NewPaperPage() {
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
-  async function addFiles(list: FileList | File[]) {
+  async function importFiles(list: FileList | File[]) {
     if (adding.current || uploading) return;
     adding.current = true;
     setError(null);
     const files = Array.from(list);
+    const added: PageItem[] = [];
     try {
       for (const f of files) {
+        const remaining = MAX_PAGES - pages.length - added.length;
+        if (remaining <= 0) throw new Error(`单份试卷最多 ${MAX_PAGES} 页，请移除已有页面后再导入。`);
         const isPdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
         if (isPdf) {
           setProcessing(`正在读取 PDF：${f.name}`);
-          const imgs = await pdfToImages(f, (d, t) => setProcessing(`正在渲染 ${f.name} · 第 ${d}/${t} 页`));
-          setPages((p) => [...p, ...imgs.map((d, i) => ({ id: rid(), dataUrl: d, name: `${f.name} · P${i + 1}`, mime: "image/jpeg" }))]);
+          const pageLimit = remaining === MAX_PAGES ? `单份试卷最多 ${MAX_PAGES} 页` : `试卷还可添加 ${remaining} 页（单份最多 ${MAX_PAGES} 页）`;
+          const imgs = await pdfToImages(f, (d, t) => setProcessing(`正在渲染 ${f.name} · 第 ${d}/${t} 页`), remaining, pageLimit);
+          added.push(...imgs.map((dataUrl, i) => ({ id: rid(), dataUrl, name: `${f.name} · P${i + 1}`, mime: "image/jpeg" })));
         } else if (f.type.startsWith("image/")) {
           setProcessing(`正在处理图片：${f.name}`);
-          const d = await fileToJpegDataUrl(f, 2000, 0.86);
-          setPages((p) => [...p, { id: rid(), dataUrl: d, name: f.name, mime: "image/jpeg" }]);
+          const dataUrl = await fileToJpegDataUrl(f, 2000, 0.86);
+          added.push({ id: rid(), dataUrl, name: f.name, mime: "image/jpeg" });
         } else if (/\.(md|markdown|tex)$/i.test(f.name)) {
           setProcessing(`正在读取文本：${f.name}`);
           const source = await fileToPaperText(f);
-          setPages((p) => [...p, { id: rid(), name: f.name, ...source }]);
+          added.push({ id: rid(), name: f.name, ...source });
         } else {
-          setError(`不支持的文件类型：${f.name}`);
+          throw new Error(`不支持的文件类型：${f.name}`);
         }
       }
-      if (!title && files[0]) setTitle(files[0].name.replace(/\.[^.]+$/, "").slice(0, 60));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (pages.length + added.length > MAX_PAGES) throw new Error(`单份试卷最多 ${MAX_PAGES} 页，请移除已有页面后再导入。`);
+      setPages((current) => [...current, ...added]);
+      if (files[0]) setTitle((current) => current.trim() ? current : files[0].name.replace(/\.[^.]+$/, "").slice(0, 60));
     } finally {
       adding.current = false;
       setProcessing(null);
     }
+  }
+
+  function addFiles(list: FileList | File[]) {
+    void importFiles(list).catch((error) => setError(error instanceof Error ? error.message : String(error)));
   }
 
   function move(i: number, d: number) {
@@ -80,7 +89,7 @@ export default function NewPaperPage() {
   }
 
   async function submit() {
-    if (!pages.length) return;
+    if (!pages.length || adding.current || processing) return;
     setError(null);
     setUploading({ done: 0, total: pages.length });
     try {
@@ -176,11 +185,13 @@ export default function NewPaperPage() {
               </div>
             )}
 
+            <MaterialImportTools pageCount={pages.length} disabled={!!processing || !!uploading} onFiles={importFiles} />
+
             {pages.length > 0 && (
               <div className="mt-6">
                 <div className="mb-3 flex items-center justify-between text-sm">
                   <span className="font-semibold text-neutral-700">已添加 {pages.length} 页</span>
-                  <button onClick={() => setPages([])} disabled={!!uploading} className="text-neutral-500 hover:text-neutral-800 disabled:opacity-30">
+                  <button onClick={() => setPages([])} disabled={!!uploading || !!processing} className="text-neutral-500 hover:text-neutral-800 disabled:opacity-30">
                     清空
                   </button>
                 </div>
@@ -204,7 +215,7 @@ export default function NewPaperPage() {
                         <div className="flex gap-1">
                           <button
                             onClick={() => move(i, -1)}
-                            disabled={i === 0 || !!uploading}
+                            disabled={i === 0 || !!uploading || !!processing}
                             className="p-1 text-neutral-900 disabled:opacity-30"
                             title="前移"
                           >
@@ -212,7 +223,7 @@ export default function NewPaperPage() {
                           </button>
                           <button
                             onClick={() => move(i, 1)}
-                            disabled={i === pages.length - 1 || !!uploading}
+                            disabled={i === pages.length - 1 || !!uploading || !!processing}
                             className="p-1 text-neutral-900 disabled:opacity-30"
                             title="后移"
                           >
@@ -221,7 +232,7 @@ export default function NewPaperPage() {
                         </div>
                         <button
                           onClick={() => setPages((ps) => ps.filter((x) => x.id !== p.id))}
-                          disabled={!!uploading}
+                          disabled={!!uploading || !!processing}
                           className="bg-white/90 p-1 text-neutral-800"
                           title="删除"
                         >

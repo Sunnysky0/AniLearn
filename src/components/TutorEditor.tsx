@@ -13,7 +13,7 @@ import {
   type VoiceItem,
 } from "@/lib/types";
 
-const AVATARS = [DEFAULT_TUTOR_AVATAR, "/avatars/rin.png", "/avatars/haruto.png", "/avatars/artoria.png"];
+const AVATARS = [DEFAULT_TUTOR_AVATAR, "/avatars/rin.png", "/avatars/kurisu.png", "/avatars/artoria.png"];
 
 const PERSONALITY_PRESETS = [
   { label: "温柔耐心", text: "温柔耐心、亲切细腻，善于鼓励学生。学生答错时先肯定思路中的亮点，再温和地指出问题。" },

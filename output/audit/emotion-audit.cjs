@@ -8,10 +8,12 @@ const loaded = new Map();
 const repairs = [];
 let repairSpeech = '一緒に考えましょう。';
 let repairFails = false;
+let repairOverride = null;
 const llm = {
   complete: async (_, input) => {
     repairs.push(input);
     if (repairFails) throw new Error('Mock repair failure');
+    if (repairOverride !== null) return repairOverride;
     return [...input.messages[0].content.matchAll(/<zh>([\s\S]*?)<\/zh>/g)]
       .map((m) => `<msg><zh>${m[1]}</zh><ja>${repairSpeech}</ja></msg>`).join('');
   },
@@ -65,6 +67,44 @@ async function run() {
   let messages = await tutor.prepareTutorMessages(cfg, '先一起看条件。', sample, signal, style);
   assert.equal(messages[0].ja, sample);
   assert.equal(repairs.length, 0);
+  const shortChinese = '这一步先把条件整理为等式，再根据等式性质同时移项，注意每项符号都要保持一致。接着代入检验。';
+  messages = await tutor.prepareTutorMessages(cfg, shortChinese, sample, signal, style);
+  assert.deepEqual(messages.map((m) => m.zh), [shortChinese]);
+  assert.equal(messages[0].ja, sample);
+  assert.equal(repairs.length, 0);
+  const bs = String.fromCharCode(92);
+  const screenshot = '本题最典型的易错点有两个：一是在求中点轨迹方程时，忽视由 $t^2 + 4' + bs + 'ge 4$ 导出的范围 $0 < x' + bs + 'le 1$；二是在换元求面积最值时，漏掉新元定义域 $u' + bs + 'ge' + bs + 'sqrt{3}$。';
+  messages = await tutor.prepareTutorMessages(cfg, screenshot, sample, signal, style);
+  assert.equal(messages.length, 2);
+  assert.ok(messages[0].zh.endsWith('；'));
+  assert.ok(messages[1].zh.startsWith('二是在换元'));
+  assert.equal(repairs.at(-1).messages[0].content.includes('<zh>' + messages[0].zh + '</zh>'), true);
+  assert.equal(repairs.at(-1).messages[0].content.includes('<zh>' + messages[1].zh + '</zh>'), true);
+  const screenshotChunks = messages.map((m) => m.zh);
+  const repairedMessage = (content) => `<msg><zh>${content}</zh><ja>一緒に確認しましょう。</ja></msg>`;
+  const movedBoundary = [screenshotChunks[0].slice(0, -2), screenshotChunks[0].slice(-2) + screenshotChunks[1]];
+  for (const output of [
+    repairedMessage(screenshotChunks.join('')),
+    movedBoundary.map(repairedMessage).join(''),
+    [...screenshotChunks].reverse().map(repairedMessage).join(''),
+    [screenshotChunks[0].replace('中点', '重点'), screenshotChunks[1]].map(repairedMessage).join(''),
+  ]) {
+    repairOverride = output;
+    const rejected = await tutor.prepareTutorMessages(cfg, screenshot, sample, signal, style);
+    assert.deepEqual(rejected.map((m) => m.zh), screenshotChunks);
+    assert.ok(rejected.every((m) => m.ja === ''));
+  }
+  repairOverride = repairedMessage('这是修复后的中文消息。');
+  messages = await tutor.prepareTutorMessages(cfg, 'これは日本語のチャットです。', '这是中文语音。', signal, style);
+  assert.equal(messages[0].zh, '这是修复后的中文消息。');
+  repairOverride = null;
+  await assert.rejects(tutor.prepareTutorMessages(cfg, 'これは日本語のチャットです。', sample, signal, style), /语言不正确/);
+  const unbroken = '这是一条没有自然停顿的说明'.repeat(10);
+  const beforeUnbroken = repairs.length;
+  messages = await tutor.prepareTutorMessages(cfg, unbroken, sample, signal, style);
+  assert.equal(messages[0].zh, unbroken);
+  assert.equal(repairs.length, beforeUnbroken);
+  pass('semantic screenshot boundaries preserved; changed or merged Chinese rejected; Japanese chat translation remains available; indivisible text stays intact');
   messages = await tutor.prepareTutorMessages(cfg, '先一起看条件。', '一緒に考えましょう。', signal, style);
   assert.equal(messages[0].ja, style + ' 一緒に考えましょう。');
   messages = await tutor.prepareTutorMessages(cfg, '先一起看条件。', '一緒に考えましょう。', signal);

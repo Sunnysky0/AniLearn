@@ -29,25 +29,71 @@ export function tokenizeForReveal(md: string): string[] {
 }
 
 export function splitShortMessages(md: string, maxLength = 80): string[] {
-  const chunks: string[] = [];
-  let current = "";
+  const source = md.trim();
+  if (!source) return [];
+
+  const tokens = tokenizeForReveal(source);
+  const tokenSizes = tokens.map((token) => Array.from(token).length);
+  const boundaries: { tokenEnd: number; length: number; priority: number }[] = [];
   let length = 0;
-  for (const token of tokenizeForReveal(md.trim())) {
-    const size = Array.from(token).length;
-    if (current.trim() && length + size > maxLength) {
-      chunks.push(current.trim());
-      current = "";
-      length = 0;
-    }
-    current += token;
-    length += size;
-    if (length >= 35 && /[。！？!?\n]$/.test(token)) {
-      chunks.push(current.trim());
-      current = "";
-      length = 0;
-    }
+  let previousNonSpace = "";
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    length += tokenSizes[index];
+    const previous = previousNonSpace;
+    if (!/^[ \t\r]$/u.test(token)) previousNonSpace = token;
+    // Only plain punctuation may form boundaries; never inspect protected atoms.
+    if (token.length !== 1) continue;
+    const paragraph = token === "\n" && previous === "\n";
+    const sentence = /[。！？!?]/u.test(token) ||
+      (token === "." && /^(?:\s|[”’」』）》】"'])/u.test(tokens[index + 1] ?? " "));
+    const semicolon = /[；;]/u.test(token);
+    const comma = /[，,、]/u.test(token);
+    const priority = paragraph || sentence ? 0 : semicolon ? 1 : comma ? 2 : -1;
+    if (priority >= 0) boundaries.push({ tokenEnd: index + 1, length, priority });
   }
-  if (current.trim()) chunks.push(current.trim());
+
+  const chunks: string[] = [];
+  let start = 0;
+  let startLength = 0;
+  while (start < tokens.length) {
+    const remainingLength = length - startLength;
+    if (remainingLength <= maxLength) {
+      const rest = tokens.slice(start).join("");
+      if (rest.trim()) chunks.push(rest);
+      break;
+    }
+
+    const candidates = boundaries.filter((boundary) => boundary.tokenEnd > start);
+    if (!candidates.length) {
+      // A sentence without a safe punctuation boundary stays intact.
+      const rest = tokens.slice(start).join("");
+      if (rest.trim()) chunks.push(rest);
+      break;
+    }
+
+    const withinBudget = candidates.filter((boundary) => boundary.length - startLength <= maxLength);
+    const boundary = withinBudget.length
+      ? withinBudget.reduce((best, candidate) =>
+          candidate.priority < best.priority ||
+          (candidate.priority === best.priority && candidate.length > best.length) ? candidate : best)
+      : candidates.reduce((nearest, candidate) => candidate.length < nearest.length ? candidate : nearest);
+
+    let tokenEnd = boundary.tokenEnd;
+    let nextLength = boundary.length;
+    while (tokenEnd < tokens.length && /^[。！？!?…”’」』）》】"')\]]$/u.test(tokens[tokenEnd])) {
+      nextLength += tokenSizes[tokenEnd];
+      tokenEnd++;
+    }
+    while (tokenEnd < tokens.length && /^\s+$/u.test(tokens[tokenEnd])) {
+      nextLength += tokenSizes[tokenEnd];
+      tokenEnd++;
+    }
+    const chunk = tokens.slice(start, tokenEnd).join("");
+    if (chunk.trim()) chunks.push(chunk);
+    start = tokenEnd;
+    startLength = nextLength;
+  }
   return chunks;
 }
 

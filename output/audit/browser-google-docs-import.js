@@ -67,7 +67,7 @@ async (page) => {
   ensure(!ordinaryPastePrevented, 'Article text field intercepted normal paste');
   await page.getByLabel('Google Docs 链接').fill(documentUrl);
   await page.getByRole('button', { name: '导入链接', exact: true }).click();
-  await page.getByText(/已添加 3\/12 页/).waitFor();
+  await page.getByText('共 3 个来源页 · 不限页数', { exact: true }).waitFor();
   ensure(await page.getByLabel('文章标题').inputValue() === '导入试卷', 'Reading title did not use the imported document name');
   ensure(await page.locator('img').count() >= 2, 'Reading image previews are missing');
   ensure((await api('/api/readings')).length === readingCount, 'Reading import created a database record before submission');
@@ -75,7 +75,7 @@ async (page) => {
 
   await page.goto(base + '/readings/new');
   ensure(await dispatchImagePaste(), 'Reading image paste was not handled');
-  await page.getByText(/已添加 1\/12 页/).waitFor();
+  await page.getByText('共 1 个来源页 · 不限页数', { exact: true }).waitFor();
   results.push({ test: 'reading Ctrl+V image paste adds a clipboard image', outcome: 'pass' });
 
   await page.evaluate(() => {
@@ -88,10 +88,16 @@ async (page) => {
     }] });
   });
   await page.getByRole('button', { name: '从剪贴板添加', exact: true }).click();
-  await page.getByText(/已添加 2\/12 页/).waitFor();
+  await page.getByText('共 2 个来源页 · 不限页数', { exact: true }).waitFor();
   ensure(requestCount === 2, 'Clipboard button preferred the link or imported duplicate image formats');
   ensure(JSON.stringify(await page.evaluate(() => window.__clipboardReadTypes)) === JSON.stringify(['image/png']), 'Clipboard button read multiple representations of the same image');
   results.push({ test: 'clipboard button prefers one image representation over a copied link', outcome: 'pass' });
+
+  await page.goto(base + '/readings/new');
+  await page.getByLabel('Google Docs 链接').fill(documentUrl + '&oversized=true');
+  await page.getByRole('button', { name: '导入链接', exact: true }).click();
+  await page.getByText('共 17 个来源页 · 不限页数', { exact: true }).waitFor({ timeout: 180000 });
+  results.push({ test: 'reading Google Docs export accepts an article beyond the exam paper limit', outcome: 'pass' });
 
   await page.goto(base + '/papers/new');
   const keyboardUrl = documentUrl + '&source=clipboard';

@@ -15,7 +15,7 @@ Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). 
 ## Product charter
 
 - **EPDL (Exam Paper Driven Learning).** The paper supplies a complete stable inventory. Five paces select representative problems and concrete goals before detailed analysis. Default pace is 纲举目张; only 条分缕析 and legacy sessions require all problems and all four core topics.
-- **Readings.** Independent English/Japanese articles, original sources, reviewed paragraphs, reading sessions, notes and open dialogue exercises. Chinese explanation and labeled foreign quotes/examples are separate content types; speech remains Japanese.
+- **Readings.** Independent English/Japanese articles, unlimited source pages, background per-page OCR, paginated source review, reading sessions, notes and open dialogue exercises. OCR resumes from saved pages after failure or restart. Chinese explanation and labeled foreign quotes/examples are separate content types; speech remains Japanese.
 - **Custom tutors.** Personality, teaching style, speaking style, avatar, greeting, and Fish Audio voice (`voiceId` + Japanese `voiceStyle` tag). Every tutor can teach every subject; the database subject column is retained only for compatibility.
 - **Models.** OpenAI / Anthropic / Grok (xAI) / Gemini, via API. No vendor SDKs — raw `fetch` + SSE in `src/lib/server/llm.ts`.
 - **Voice.** Fish Audio TTS (`s2.1-pro`). Chat and board are Chinese; spoken audio is Japanese. Text in the chat bubble reveals in sync with playback.
@@ -81,6 +81,11 @@ API (all `force-dynamic`):
 | --- | --- |
 | `POST /api/papers` then `POST /api/papers/:id/pages` | Create paper; append images or UTF-8 Markdown/LaTeX sources as base64 data URLs. PDF is rasterized in the browser first. Each text file is one source page (max 1.5 MB). |
 | `POST /api/import/google-doc` | Fetch a public Google Docs document as a PDF with all tabs; validates every redirect and limits the response to 20 MB. Does not create a material record. |
+| `POST /api/readings` then `POST /api/readings/:id/sources` | New paged uploads declare `expectedPageCount`; append each source at a stable zero-based `idx`. Matching retries are idempotent. The final source starts background OCR. Exam limits do not apply to readings. |
+| `POST /api/readings/:id/analyze` | Per-source OCR. `{ background: true }` returns `202` and schedules work with `after`; default preserves NDJSON. `{ restart: true }` clears page drafts and advances the revision. Background re-recognition moves legacy articles into paged review. |
+| `GET /api/readings/:id/analysis-status` | Lightweight completed/total/current-page status, revision and resumability using the reading operation lock; no source payloads or full drafts. |
+| `GET/PATCH /api/readings/:id/pages/:idx` | Read or save one recognized source page; saves require the current material revision. Empty recognized pages are complete. |
+| `POST /api/readings/:id/confirm` | Accept only `{ revision }`; require every expected page and generate full text plus paragraphs in source order, atomically setting `ready`. Legacy articles retain their full-text PATCH endpoint until background re-recognition. |
 | `POST /api/papers/:id/analyze` | Inventory then per-problem vision analysis, streamed as NDJSON `AnalysisEvent`. Body `{ restart?: boolean }`; default resumes saved draft. Continues after browser disconnect. |
 | `PATCH/DELETE /api/papers/:id` | Edit/delete under the paper lock. Subject cannot change after publication or while a draft exists. |
 | `POST /api/sessions` | Start classroom (`paperId` + `tutorId`). Requires complete, error-free `ready` paper; saves snapshot in a transaction. |
@@ -104,6 +109,8 @@ Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullab
 - Replace published problems atomically. A failed reanalysis keeps the prior published set; existing classrooms keep their original snapshot. Legacy sessions without snapshots are backfilled before replacing problems.
 - Draft problem events use provisional negative IDs. After publication, load persisted problems rather than treating provisional IDs as database IDs.
 - Analysis continues when its browser stream disconnects. A process restart stops the task, but preserves completed draft work. The student must click to resume; there is no durable job worker or automatic restart.
+- Reading OCR starts after every expected source page uploads, runs with Next.js `after`, saves each recognized page in `readings.draft`, and continues when the browser closes. A process restart leaves the saved pages intact; the article page reports an unlocked stale run as resumable.
+- Reading OCR reads only the current source payload, makes at most two image-recognition attempts per page, and saves outside the retry loop. `[空白页]` stores an empty draft value whose key still counts as complete. Reading tasks have no whole-article deadline; every LLM call retains its 180-second timeout. Confirmation has no aggregate 1.5 MB or 1,000-paragraph cap, but each imported text source retains its 1.5 MB cap. The reading classroom renders 50 source paragraphs per group.
 - `tryOperationLock` must reserve a connection from the separate lock pool, never the database work pool. Release on success, failure, cancellation, and pre-stream errors. Keep paper/session lock namespaces consistent across app processes.
 - Serialize session generation, jumps, and deletion. A `409` means another operation owns the lock. Client retries must be bounded; do not remove server locks to make an interrupted request succeed.
 - Only accept coverage quotes of at least six non-whitespace characters that appear in actual tutor Chinese messages or board content. Normal tags reference the current turn; completion may make one bounded repair call using saved teaching from this session and problem, never student input, other problems, or reference solutions. Reject headings and completion declarations as evidence. Persist coverage by problem index.
@@ -135,8 +142,8 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 - `next` / `finish` and explicit `complete_problem` require the current plan's goals, backed by actual emitted or saved tutor content. Complete pace and legacy plans require all four core topics. Complete coverage alone does not finish a problem. Finish cannot skip unfinished selected units. Excluded items are not marked mastered. Coverage is a progress guard, not independent semantic verification.
 - `goodbye` preserves progress and suppresses board work, completion and automatic continuation. The return-home control unlocks only after a successful done, normal stream EOF, and the entire playback/reveal queue is idle; cancellation or failure must not unlock it. Goodbye state is page-local; retry retains intent.
 - Sessions keep a paper/problem snapshot. Paper and session mutations use separate PostgreSQL advisory-lock connections, including across app processes.
-- PDF, upload UI and server share `MAX_PAPER_PAGES = 12`; oversized PDFs are rejected explicitly.
-- Paper and reading uploads accept pasted images and public Google Docs links. The shared import control reads one preferred image representation per clipboard item; Google Docs export imports all tabs as PDF pages and goes through the existing review flow. Text-entry controls keep their normal paste behavior. Imports are staged atomically and all source pages, including pasted reading text, count toward the 12-page limit.
+- Exam paper PDF, upload UI and server share `MAX_PAPER_PAGES = 12`; oversized paper PDFs are rejected explicitly. Reading sources have no page-count cap and are rendered and uploaded one page at a time.
+- Paper and reading uploads accept pasted images and public Google Docs links. The shared import control reads one preferred image representation per clipboard item; Google Docs export imports all tabs as PDF pages and goes through the existing review flow. Text-entry controls keep their normal paste behavior. Imports are staged before submission; paper pages, including pasted paper text, count toward the 12-page paper limit.
 - Google Docs imports require public access and export permission, use no Google login, and time out after 30 seconds. Export requests are restricted to Docs document links, allow at most five redirects to Google export hosts, and cap the PDF at 20 MiB. No document source is stored until the user submits the upload form.
 - Client pump (`Classroom.tsx`): play each `message` (TTS + reveal), then apply `board` / `problem` / `done`. User may interrupt; pending input flushes the queue.
 
@@ -225,5 +232,6 @@ The inventory itself is generated by a vision model; structural validation canno
 | Provider API | `llm.ts`, `types.ts` `PROVIDERS`, `settings.ts`, `/settings` UI |
 | TTS | `/api/tts`, `text.ts` validation, `tutor-output.ts`, `Classroom.tsx` prefetch/play/replay/mute/cleanup |
 | Upload / PDF limits | `types.ts` `MAX_PAPER_PAGES`, `media.ts`, upload page and pages API |
+| Reading OCR and review | `reading-analysis.ts`, reading upload/source/page/confirm handlers, `ReadingView.tsx`, `ReadingClassroom.tsx` and reading recovery regressions |
 | Operation locks | `locks.ts`, paper/session mutation handlers, cancellation and concurrency regressions |
 | Schema | `schema.ts`, DTO mappers, every Route Handler that reads the table |

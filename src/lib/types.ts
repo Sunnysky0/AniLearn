@@ -330,8 +330,24 @@ export interface ReadingParagraph { id: string; text: string; page: number }
 export interface ReadingDTO {
   id: number; title: string; language: ReadingLanguage; status: string;
   paragraphs: ReadingParagraph[]; extracted: string; overview: string;
-  error: string | null; revision: number; createdAt: string; pageCount: number;
+  error: string | null; revision: number; createdAt: string; pageCount: number; expectedPageCount?: number;
 }
+export interface ReadingAnalysisStatus {
+  status: string;
+  revision?: number;
+  completedPages: number;
+  totalPages: number;
+  currentPage: number | null;
+  sourcesComplete: boolean;
+  running: boolean;
+  resumable: boolean;
+  error: string | null;
+}
+export interface ReadingAnalysisProgress { done: number; total: number; page: number }
+export type ReadingAnalysisEvent =
+  | ({ type: "progress" } & ReadingAnalysisProgress)
+  | { type: "done"; reading: ReadingDTO }
+  | { type: "error"; error: string };
 export interface ReadingMessage {
   id: number; role: "user" | "tutor"; content: string; speech: string;
   paragraphIdx: number; kind: "text" | "quote" | "example" | "exercise" | "feedback";

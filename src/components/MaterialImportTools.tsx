@@ -10,6 +10,7 @@ const inputClass = "min-w-0 flex-1 border border-neutral-300 bg-white px-3 py-2 
 
 interface Props {
   pageCount: number;
+  maxPages?: number;
   disabled?: boolean;
   onFiles(files: File[]): Promise<void>;
 }
@@ -27,7 +28,7 @@ function docsLinkFromClipboard(values: string[]): string | null {
   return null;
 }
 
-export function MaterialImportTools({ pageCount, disabled = false, onFiles }: Props) {
+export function MaterialImportTools({ pageCount, maxPages = MAX_PAPER_PAGES, disabled = false, onFiles }: Props) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -40,7 +41,7 @@ export function MaterialImportTools({ pageCount, disabled = false, onFiles }: Pr
   useEffect(() => { onFilesRef.current = onFiles; }, [onFiles]);
 
   const addFiles = useCallback(async (files: File[]) => {
-    if (!files.length || disabled || pageCount >= MAX_PAPER_PAGES || busyRef.current) return;
+    if (!files.length || disabled || pageCount >= maxPages || busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setError("");
@@ -52,7 +53,7 @@ export function MaterialImportTools({ pageCount, disabled = false, onFiles }: Pr
       busyRef.current = false;
       setBusy(false);
     }
-  }, [disabled, pageCount]);
+  }, [disabled, maxPages, pageCount]);
 
   const importGoogleDoc = useCallback(async (value: string) => {
     const link = extractGoogleDocsUrl(value);
@@ -60,7 +61,7 @@ export function MaterialImportTools({ pageCount, disabled = false, onFiles }: Pr
       setError("请输入有效的 Google Docs 文档链接。");
       return;
     }
-    if (disabled || pageCount >= MAX_PAPER_PAGES || busyRef.current) return;
+    if (disabled || pageCount >= maxPages || busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setError("");
@@ -94,14 +95,14 @@ export function MaterialImportTools({ pageCount, disabled = false, onFiles }: Pr
       busyRef.current = false;
       setBusy(false);
     }
-  }, [disabled, pageCount]);
+  }, [disabled, maxPages, pageCount]);
 
   async function readClipboard() {
     if (typeof navigator === "undefined" || !navigator.clipboard?.read) {
       setError("浏览器暂不支持读取剪贴板，请使用 Ctrl+V／⌘V 或粘贴 Google Docs 链接。");
       return;
     }
-    if (disabled || pageCount >= MAX_PAPER_PAGES || busyRef.current || clipboardRef.current) return;
+    if (disabled || pageCount >= maxPages || busyRef.current || clipboardRef.current) return;
     clipboardRef.current = true;
     setBusy(true);
     setError("");
@@ -153,7 +154,7 @@ export function MaterialImportTools({ pageCount, disabled = false, onFiles }: Pr
 
   useEffect(() => {
     function onPaste(event: globalThis.ClipboardEvent) {
-      if (isTextEntry(event.target) || disabled || pageCount >= MAX_PAPER_PAGES || busyRef.current || clipboardRef.current) return;
+      if (isTextEntry(event.target) || disabled || pageCount >= maxPages || busyRef.current || clipboardRef.current) return;
       const clipboard = event.clipboardData;
       if (!clipboard) return;
       const files = Array.from(clipboard.files).filter((file) => IMAGE_TYPES.includes(file.type));
@@ -183,23 +184,23 @@ export function MaterialImportTools({ pageCount, disabled = false, onFiles }: Pr
     }
     document.addEventListener("paste", onPaste as EventListener, true);
     return () => document.removeEventListener("paste", onPaste as EventListener, true);
-  }, [disabled, pageCount, addFiles, importGoogleDoc]);
+  }, [disabled, maxPages, pageCount, addFiles, importGoogleDoc]);
 
   return (
     <section aria-label="剪贴板与 Google Docs 导入" className="mt-5 border border-neutral-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-neutral-800">剪贴板与 Google Docs</h2>
-          <p className="mt-1 text-xs text-neutral-500">可粘贴图片或公开共享的 Google Docs 链接 · 已添加 {pageCount}/{MAX_PAPER_PAGES} 页</p>
+          <p className="mt-1 text-xs text-neutral-500">可粘贴图片或公开共享的 Google Docs 链接 · {Number.isFinite(maxPages) ? `已添加 ${pageCount}/${maxPages} 页` : `已添加 ${pageCount} 页`}</p>
         </div>
-        <button type="button" onClick={() => void readClipboard()} disabled={disabled || busy || pageCount >= MAX_PAPER_PAGES} className="flex items-center gap-2 border border-neutral-300 px-3 py-2 text-sm hover:border-neutral-800 disabled:cursor-not-allowed disabled:opacity-40">
+        <button type="button" onClick={() => void readClipboard()} disabled={disabled || busy || pageCount >= maxPages} className="flex items-center gap-2 border border-neutral-300 px-3 py-2 text-sm hover:border-neutral-800 disabled:cursor-not-allowed disabled:opacity-40">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardPaste className="h-4 w-4" />}
           {busy ? "正在导入…" : "从剪贴板添加"}
         </button>
       </div>
       <form className="mt-3 flex flex-col gap-2 sm:flex-row" onSubmit={(event) => { event.preventDefault(); void importGoogleDoc(url); }}>
-        <input aria-label="Google Docs 链接" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="粘贴 Google Docs 分享链接" disabled={disabled || busy || pageCount >= MAX_PAPER_PAGES} className={inputClass} />
-        <button type="submit" disabled={disabled || busy || pageCount >= MAX_PAPER_PAGES || !url.trim()} className="flex shrink-0 items-center justify-center gap-2 border border-neutral-900 px-4 py-2 text-sm font-medium text-neutral-900 disabled:cursor-not-allowed disabled:opacity-40">
+        <input aria-label="Google Docs 链接" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="粘贴 Google Docs 分享链接" disabled={disabled || busy || pageCount >= maxPages} className={inputClass} />
+        <button type="submit" disabled={disabled || busy || pageCount >= maxPages || !url.trim()} className="flex shrink-0 items-center justify-center gap-2 border border-neutral-900 px-4 py-2 text-sm font-medium text-neutral-900 disabled:cursor-not-allowed disabled:opacity-40">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}导入链接
         </button>
       </form>

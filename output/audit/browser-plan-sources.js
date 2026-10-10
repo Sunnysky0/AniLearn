@@ -85,16 +85,17 @@ async (page) => {
     if (source === 'image') await page.locator('input[type=file]').setInputFiles('public/avatars/artoria.png');
     if (source === 'text') await page.locator('input[type=file]').setInputFiles({ name: 'article.txt', mimeType: 'text/plain', buffer: Buffer.from('Scientists study how cities change.\n\nTheir work helps communities plan for the future.') });
     if (source === 'paste') await page.getByLabel('文章原文', { exact: true }).fill('Scientists study how cities change.\n\nTheir work helps communities plan for the future.');
-    await page.getByRole('button', { name: '上传文章', exact: true }).click();
+    await page.getByRole('button', { name: '上传文章并自动识别', exact: true }).click();
     await page.waitForURL(/\/readings\/\d+$/);
     const id = Number(page.url().split('/').at(-1));
-    await page.getByRole('button', { name: '识别原文', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('textarea').value.length > 10);
-    await page.getByRole('button', { name: '确认原文', exact: true }).click();
-    await page.getByText('原文已确认', { exact: true }).waitFor();
+    await page.getByText('识别完成，请校对后确认', { exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('textarea[aria-label="当前页校对原文"]')?.value.length > 10);
+    await page.getByRole('button', { name: '确认全部原文', exact: true }).click();
+    await page.getByText('文章原文已确认', { exact: true }).waitFor();
     const data = await api('/api/readings/' + id);
     ensure(data.reading.pageCount === (source === 'pdf' ? 2 : 1), 'Reading source page count mismatch');
-    ensure(data.reading.paragraphs.length >= 2, 'Reading paragraph IDs missing');
+    const [storedReading] = await sql('select status, jsonb_array_length(paragraphs) as paragraph_count from readings where id=$1', [id]);
+    ensure(storedReading.status === 'ready' && storedReading.paragraph_count >= 2, 'Reading paragraphs were not confirmed');
     if (source === 'image') {
       await page.getByLabel('阅读导师').selectOption(String(tutor.id));
       await page.getByRole('button', { name: '开始导读', exact: true }).click();
@@ -108,11 +109,76 @@ async (page) => {
     }
     results.push({ test: 'reading ' + source + ' upload, OCR/source review and stable paragraphs', outcome: 'pass' });
   }
+  for (const [name, pages] of [['seventeen-pages.pdf', 17], ['hundred-pages.pdf', 100]]) {
+    const uploadPage = await page.context().newPage();
+    await uploadPage.goto(base + '/readings/new');
+    await uploadPage.locator('input[type=file]').setInputFiles('output/audit/' + name);
+    await uploadPage.getByText(`共 ${pages} 个来源页 · 不限页数`, { exact: true }).waitFor({ timeout: 180000 });
+    await uploadPage.getByRole('button', { name: '上传文章并自动识别', exact: true }).click();
+    await uploadPage.waitForURL(/\/readings\/\d+$/);
+    const id = Number(uploadPage.url().split('/').at(-1));
+    await uploadPage.close();
+    await page.goto(base + '/readings');
+    const deadline = Date.now() + 60000;
+    let status;
+    while (Date.now() < deadline) {
+      status = await api(`/api/readings/${id}/analysis-status`);
+      if (status.status === 'review' || status.status === 'failed') break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    ensure(status?.status === 'review' && status.completedPages === pages, `${pages}-page OCR did not finish after leaving the article page`);
+    await page.goto(base + '/readings/' + id);
+    await page.getByRole('button', { name: '确认全部原文', exact: true }).click();
+    await page.getByText('文章原文已确认', { exact: true }).waitFor();
+    const [storedReading] = await sql('select status, (select count(*)::int from reading_sources where reading_id=$1) as source_count, jsonb_array_length(paragraphs) as paragraph_count from readings where id=$1', [id]);
+    ensure(storedReading.status === 'ready' && storedReading.source_count === pages && storedReading.paragraph_count === pages * 2, `${pages}-page article did not preserve all pages and paragraphs`);
+    if (pages === 100) {
+      await page.screenshot({ path: 'output/playwright/reading-hundred-page-review.png', fullPage: true });
+      await page.getByLabel('阅读导师').selectOption(String(tutor.id));
+      await page.getByRole('button', { name: '开始导读', exact: true }).click();
+      await page.waitForURL(/\/reading-classroom\/\d+$/);
+      await page.getByRole('button', { name: '进入阅读课堂' }).click();
+      await page.locator('#paragraph-0').waitFor();
+      ensure(await page.locator('[id^="paragraph-"]').count() === 50, 'Long reading rendered more than one 50-paragraph group');
+      await page.getByLabel('段落组').selectOption('1');
+      await page.locator('#paragraph-50').waitFor();
+      ensure(await page.locator('[id^="paragraph-"]').count() === 50 && await page.locator('#paragraph-99').count() === 1, 'Long reading did not switch to the next 50-paragraph group');
+      await page.screenshot({ path: 'output/playwright/reading-fifty-paragraph-group.png' });
+    }
+    results.push({ test: `${pages}-page PDF uploads without a cap, completes in the background after closing its tab and confirms in source order`, outcome: 'pass' });
+  }
   await page.goto(base + '/readings/new');
-  await page.locator('input[type=file]').setInputFiles('output/audit/seventeen-pages.pdf');
-  await page.getByText(/PDF 共 17 页，每篇文章最多 12 个来源页/).waitFor();
-  ensure(await page.getByRole('button', { name: '上传文章', exact: true }).isDisabled(), 'Oversized article accepted');
-  results.push({ test: 'reading PDF page limit rejects oversized source', outcome: 'pass' });
+  await page.getByLabel('文章标题').fill('混合来源上传续传测试');
+  const image = await (await page.request.get(base + '/avatars/artoria.png')).body();
+  const mixedFiles = [
+    { name: 'first-page.md', mimeType: 'text/markdown', buffer: Buffer.from('First source page stays first.') },
+    ...Array.from({ length: 12 }, (_, index) => ({ name: `page-${index + 2}.png`, mimeType: 'image/png', buffer: image })),
+  ];
+  await page.locator('input[type=file]').setInputFiles(mixedFiles);
+  await page.getByText('共 13 个来源页 · 不限页数', { exact: true }).waitFor();
+  let interrupted = false;
+  await page.route('**/api/readings/*/sources', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const body = route.request().postDataJSON();
+    if (body.idx === 4 && !interrupted) {
+      interrupted = true;
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '模拟上传中断' }) });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.getByRole('button', { name: '上传文章并自动识别', exact: true }).click();
+  await page.getByRole('alert').getByText('模拟上传中断', { exact: true }).waitFor();
+  ensure(interrupted, 'Upload retry fixture did not interrupt a source page');
+  await page.getByRole('button', { name: '续传未完成来源', exact: true }).click();
+  await page.waitForURL(/\/readings\/\d+$/);
+  await page.unroute('**/api/readings/*/sources');
+  const mixedId = Number(page.url().split('/').at(-1));
+  await page.getByText('识别完成，请校对后确认', { exact: true }).waitFor({ timeout: 30000 });
+  const mixedSources = await api(`/api/readings/${mixedId}`);
+  ensure(mixedSources.sources.length === 13 && mixedSources.sources[0].mime === 'text/markdown' && mixedSources.sources[1].mime === 'image/jpeg', 'Mixed source order or MIME was not preserved');
+  ensure((await api(`/api/readings/${mixedId}/analysis-status`)).completedPages === 13, 'Mixed upload did not finish every page');
+  results.push({ test: '13 mixed sources upload in order without a cap, retry idempotently after interruption and auto-analyze after the last page', outcome: 'pass' });
   ensure(errors.length === 0, errors.join('\n'));
   await page.evaluate(r => localStorage.setItem('upgrade-plan-source-results', JSON.stringify(r)), results);
   return results;

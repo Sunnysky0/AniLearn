@@ -7,7 +7,10 @@ async (page) => {
   const models = { ...settings.models, chat: { connectionId: 'chat', model: 'audit-teach' }, analysis: { connectionId: 'analysis', model: 'audit-plan' } };
   await api('/api/settings', 'PUT', { models, fish: { enabled: false } });
   page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => { if (request.url().endsWith('/turn')) sent.push(request.postDataJSON()); });
+  page.on('request', request => {
+    if (request.url().endsWith('/turn')) sent.push(request.postDataJSON());
+    if (request.url().endsWith('/api/tts')) tts.push(request.postDataJSON());
+  });
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto(base + '/settings');
   await page.getByRole('heading', { name: '模型用途' }).waitFor();
@@ -24,13 +27,13 @@ async (page) => {
     await page.getByLabel('文章标题').fill(language + ' browser article');
     await page.getByLabel('文章语言').selectOption(language);
     await page.locator('input[type=file]').setInputFiles({ name: language + '.md', mimeType: 'text/markdown', buffer: Buffer.from(language === 'en' ? 'Scientists study how cities change.\n\nTheir work helps communities plan for the future.' : '春になると、街の公園に花が咲きます。\n\n人々は散歩しながら季節の変化を楽しみます。') });
-    await page.getByText(language + '.md', { exact: true }).waitFor();
-    await page.getByRole('button', { name: '上传文章', exact: true }).click();
+    await page.getByText('1. ' + language + '.md', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '上传文章并自动识别', exact: true }).click();
     await page.waitForURL(/\/readings\/\d+$/);
-    await page.getByRole('button', { name: '识别原文', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('textarea').value.length > 10);
-    await page.getByRole('button', { name: '确认原文', exact: true }).click();
-    await page.getByText('原文已确认', { exact: true }).waitFor();
+    await page.getByText('识别完成，请校对后确认', { exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('textarea[aria-label="当前页校对原文"]')?.value.length > 10);
+    await page.getByRole('button', { name: '确认全部原文', exact: true }).click();
+    await page.getByText('文章原文已确认', { exact: true }).waitFor();
     await page.getByLabel('阅读导师').selectOption(String(tutor.id));
     await page.getByRole('button', { name: '开始导读', exact: true }).click();
     await page.waitForURL(/\/reading-classroom\/\d+$/);
@@ -74,7 +77,7 @@ async (page) => {
   }
   const wav = Buffer.alloc(44 + 8000 * 3 * 2);
   wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVE', 8); wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
-  await page.route('**/api/tts', async route => { tts.push(route.request().postDataJSON()); await route.fulfill({ contentType: 'audio/wav', body: wav }); });
+  await page.route('**/api/tts', async route => { await route.fulfill({ contentType: 'audio/wav', body: wav }); });
   await page.addInitScript(() => { window.__upgradeAudio = []; const Original = window.Audio; window.Audio = function(...args) { const audio = new Original(...args); window.__upgradeAudio.push(audio); return audio; }; });
   await api('/api/settings', 'PUT', { fish: { enabled: true, apiKey: 'audit-fake-fish-key' } });
   const r = await api('/api/readings', 'POST', { title: '语音同步测试', language: 'en', text: 'Scientists study how cities change.' });

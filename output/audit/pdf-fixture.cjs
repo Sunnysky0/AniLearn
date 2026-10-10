@@ -22,3 +22,4 @@ function pdf(pages, filename) {
 }
 pdf(2, 'output/audit/two-pages.pdf');
 pdf(17, 'output/audit/seventeen-pages.pdf');
+pdf(100, 'output/audit/hundred-pages.pdf');

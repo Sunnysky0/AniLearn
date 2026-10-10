@@ -325,7 +325,7 @@ export async function complete(cfg: LLMConfig, opts: ChatOptions): Promise<strin
 }
 
 export function parseDataUrl(url: string): { mime: string; data: string } | null {
-  const m = /^data:([^;,]+);base64,([\s\S]+)$/.exec(url);
+  const m = /^data:([^;,]+);base64,([\s\S]*)$/.exec(url);
   if (!m) return null;
   return { mime: m[1], data: m[2] };
 }

@@ -14,6 +14,7 @@ const admin = new Pool({ connectionString: original });
 let app;
 let mock;
 let pool;
+let appEnv;
 let ownsDatabase = false;
 const requests = [];
 
@@ -40,12 +41,25 @@ function json(res, data, status = 200) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
+function startApp() {
+  app = spawn(process.execPath, [path.join(root, 'node_modules/next/dist/bin/next'), 'start', '-H', '127.0.0.1', '-p', '3107'], { cwd: root, env: appEnv, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  app.stdout.on('data', d => process.stdout.write(d));
+  app.stderr.on('data', d => process.stderr.write(d));
+}
+async function stopApp() {
+  if (!app || app.exitCode !== null) return;
+  const stopped = new Promise(resolve => app.once('exit', resolve));
+  app.kill();
+  await stopped;
+}
 async function init() {
   const exists = await admin.query('select 1 from pg_database where datname = $1', [dbName]);
   if (exists.rowCount) throw new Error('Audit database already exists; refusing to reuse it.');
   await admin.query(`CREATE DATABASE ${dbName}`);
   ownsDatabase = true;
-  const env = { ...process.env, DATABASE_URL: auditUrl.href };
+  const auditTimeoutPreload = path.join(root, 'output/audit/short-llm-timeout.cjs');
+  const env = { ...process.env, DATABASE_URL: auditUrl.href, NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${auditTimeoutPreload}`].filter(Boolean).join(' ') };
+  appEnv = env;
   const schema = spawn(process.execPath, [path.join(root, 'node_modules/drizzle-kit/bin.cjs'), 'push', '--force', '--config=drizzle.config.ts'], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let schemaOutput = '';
   schema.stdout.on('data', d => { schemaOutput += d; });
@@ -57,6 +71,11 @@ async function init() {
     try {
       if (req.url === '/requests') return json(res, requests);
       if (req.url === '/shutdown') { json(res, { ok: true }); setImmediate(cleanup); return; }
+      if (req.url === '/restart' && req.method === 'POST') {
+        await stopApp();
+        startApp();
+        return json(res, { ok: true });
+      }
       if (req.url === '/fixture') return json(res, { normal });
       if (req.method !== 'POST') return json(res, { error: 'not found' }, 404);
       let body = await readJson(req);
@@ -76,6 +95,7 @@ async function init() {
       const system = body.messages[0].content;
       const input = body.messages.at(-1).content;
       const inputText = typeof input === 'string' ? input : input.filter(p => p.type === 'text').map(p => p.text).join('\n');
+      if (body.model === 'audit-reading-timeout' && system.startsWith('转写本页')) await new Promise(() => {});
       let output = normal;
       let ending = 'stop';
       if (system.includes('[MESSAGE_REPAIR]')) {
@@ -103,6 +123,10 @@ async function init() {
         const topics = thorough ? ['solution', 'knowledge', 'skills', 'pitfalls'] : system.includes('档位：羽登化境') ? ['extension', 'practice'] : ['knowledge', 'skills'];
         const descriptions = { solution: '完整解法及答案', knowledge: '具体知识及依据', skills: '关键方法与应用', pitfalls: '易错点与避错办法', extension: '推广、迁移联系及适用边界', practice: '变式练习及作答反馈' };
         output = '<plan>' + indices.map(idx => `<unit idx="${idx}" related="${idx === 0 && inventory.items.length > 1 ? '1' : ''}" reason="代表题覆盖重点"><goal topic="${topics[0]}">${descriptions[topics[0]]}</goal>${topics.slice(1).map(topic => `<goal topic="${topic}">${descriptions[topic]}</goal>`).join('')}</unit>`).join('') + '</plan>';
+      } else if (system.startsWith('转写本页') && body.model === 'audit-reading-truncated') {
+        output = '<source>partially recognized text</source>'; ending = 'length';
+      } else if (system.startsWith('转写本页') && body.model === 'audit-reading-blank') {
+        output = '<source>[空白页]</source>';
       } else if (system.startsWith('转写本页')) {
         output = `<source>${system.includes('日语') ? '春になると、街の公園に花が咲きます。\n\n人々は散歩しながら季節の変化を楽しみます。' : 'Scientists study how cities change.\n\nTheir work helps communities plan for the future.'}</source>`;
       } else if (system.includes('陪中国学生阅读')) {
@@ -171,9 +195,7 @@ async function init() {
     } catch (e) { json(res, { error: e.message }, 500); }
   });
   await new Promise(resolve => mock.listen(4107, '127.0.0.1', resolve));
-  app = spawn(process.execPath, [path.join(root, 'node_modules/next/dist/bin/next'), 'start', '-H', '127.0.0.1', '-p', '3107'], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  app.stdout.on('data', d => process.stdout.write(d));
-  app.stderr.on('data', d => process.stderr.write(d));
+  startApp();
   console.log('AUDIT_RUNTIME_READY http://127.0.0.1:3107 (isolated database, dummy credentials)');
 }
 let closing = false;
@@ -181,10 +203,7 @@ async function cleanup() {
   if (closing) return;
   closing = true;
   fs.writeFileSync(path.join(__dirname, 'requests.json'), JSON.stringify(requests, null, 2));
-  if (app) {
-    app.kill();
-    await new Promise(resolve => app.once('exit', resolve));
-  }
+  await stopApp();
   if (mock) await new Promise(resolve => mock.close(resolve));
   if (pool) await pool.end();
   if (ownsDatabase) await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);

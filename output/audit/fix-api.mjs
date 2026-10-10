@@ -15,7 +15,14 @@ async function sql(query, params = []) {
   return r.json();
 }
 async function model(name, target = 'chatModel') {
-  assert.equal((await api('/api/settings', 'PUT', { provider: 'openai', providers: { openai: { apiKey: 'audit-dummy-key-only', baseUrl: 'http://127.0.0.1:4107/v1', [target]: name } } })).status, 200);
+  const settings = (await api('/api/settings')).value;
+  const purpose = target === 'analysisModel' ? 'analysis' : 'chat';
+  const binding = settings.models[purpose];
+  const connections = settings.connections.map(connection => connection.id === binding.connectionId
+    ? { ...connection, protocol: 'openai-compatible', apiKey: 'audit-dummy-key-only', baseUrl: 'http://127.0.0.1:4107/v1' }
+    : connection);
+  const result = await api('/api/settings', 'PUT', { connections, models: { ...settings.models, [purpose]: { ...binding, model: name } } });
+  assert.equal(result.status, 200, JSON.stringify(result.value));
 }
 async function paper() {
   const p = (await api('/api/papers', 'POST', { title: '修复回归试卷', subject: '数学', pace: 'thorough' })).value;

@@ -1,7 +1,7 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { readings, readingSources, readingSessions, readingMessages, tutors } from "@/db/schema";
-import { MAX_PAPER_PAGES, MAX_PAPER_TEXT_BYTES, type ReadingDTO, type ReadingMessage, type ReadingSessionDTO, type ReadingParagraph } from "@/lib/types";
+import { MAX_PAPER_TEXT_BYTES, type ReadingDTO, type ReadingMessage, type ReadingSessionDTO, type ReadingParagraph } from "@/lib/types";
 import { parseDataUrl } from "./llm";
 import { decodePaperText } from "@/lib/paper-source";
 
@@ -9,7 +9,11 @@ export function validId(value: string): number | null {
   const id = Number(value); return Number.isInteger(id) && id > 0 && id <= 2147483647 ? id : null;
 }
 export function readingDTO(row: typeof readings.$inferSelect, pageCount = 0): ReadingDTO {
-  return { id: row.id, title: row.title, language: row.language === "ja" ? "ja" : "en", status: row.status, paragraphs: row.paragraphs, extracted: row.extracted, overview: row.overview, error: row.error, revision: row.revision, createdAt: row.createdAt.toISOString(), pageCount };
+  return { id: row.id, title: row.title, language: row.language === "ja" ? "ja" : "en", status: row.status, paragraphs: row.paragraphs, extracted: row.extracted, overview: row.overview, error: row.error, revision: row.revision, createdAt: row.createdAt.toISOString(), pageCount, expectedPageCount: row.expectedPageCount };
+}
+type ReadingSummaryRow = Pick<typeof readings.$inferSelect, "id" | "title" | "language" | "status" | "overview" | "error" | "revision" | "createdAt" | "expectedPageCount">;
+export function readingSummaryDTO(row: ReadingSummaryRow, pageCount = 0): ReadingDTO {
+  return { id: row.id, title: row.title, language: row.language === "ja" ? "ja" : "en", status: row.status, paragraphs: [], extracted: "", overview: row.overview, error: row.error, revision: row.revision, createdAt: row.createdAt.toISOString(), pageCount, expectedPageCount: row.expectedPageCount };
 }
 export function readingSessionDTO(row: typeof readingSessions.$inferSelect): ReadingSessionDTO {
   return { id: row.id, readingId: row.readingId, tutorId: row.tutorId, currentIdx: row.currentIdx, status: row.status, progress: row.progress, notes: row.notes, updatedAt: row.updatedAt.toISOString() };
@@ -20,7 +24,6 @@ export function readingMessageDTO(row: typeof readingMessages.$inferSelect): Rea
 export function paragraphsFromText(text: string, revision: number, sources: string[] = []): ReadingParagraph[] {
   const paragraphs = text.replace(/\r\n?/g, "\n").split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
   if (!paragraphs.length) throw new Error("文章原文不能为空。");
-  if (paragraphs.length > 1000) throw new Error("文章段落过多，请拆分为单篇材料。");
   let page = 1;
   return paragraphs.map((text, i) => {
     const match = sources.findIndex((source, index) => index >= page - 1 && source.includes(text));
@@ -28,10 +31,24 @@ export function paragraphsFromText(text: string, revision: number, sources: stri
     return { id: `${revision}-p${i + 1}`, text, page };
   });
 }
+export function paragraphsFromPages(pages: string[], revision: number): ReadingParagraph[] {
+  const paragraphs: ReadingParagraph[] = [];
+  pages.forEach((source, pageIndex) => {
+    source.replace(/\r\n?/g, "\n").split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean).forEach((text) => {
+      paragraphs.push({ id: `${revision}-p${paragraphs.length + 1}`, text, page: pageIndex + 1 });
+    });
+  });
+  if (!paragraphs.length) throw new Error("文章原文不能为空。");
+  return paragraphs;
+}
+export function hasPageDraft(draft: Record<string, string>, idx: number): boolean {
+  return Object.prototype.hasOwnProperty.call(draft, String(idx));
+}
 export function decodeReadingSource(dataUrl: unknown) {
   const parsed = parseDataUrl(typeof dataUrl === "string" ? dataUrl : "");
   if (!parsed || !/^(?:image\/(?:jpeg|png|webp|gif)|text\/(?:plain|markdown))$/.test(parsed.mime)) throw new Error("仅支持图片、Markdown 和纯文本来源。");
   const isText = parsed.mime.startsWith("text/");
+  if (!isText && parsed.data.length < 4) throw new Error("图片来源无效。");
   if (parsed.data.length > (isText ? 2_000_000 : 12_000_000)) throw new Error(isText ? "单个文本最多 1.5 MB。" : "图片过大。");
   if (isText) {
     if (parsed.data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(parsed.data)) throw new Error("文本编码无效。");
@@ -43,8 +60,24 @@ export function decodeReadingSource(dataUrl: unknown) {
 export async function getReading(id: number) {
   const [row] = await db.select().from(readings).where(eq(readings.id, id));
   if (!row) return null;
-  const sources = await db.select().from(readingSources).where(eq(readingSources.readingId, id)).orderBy(asc(readingSources.idx));
+  const sources = await db.select({ idx: readingSources.idx, mime: readingSources.mime }).from(readingSources).where(eq(readingSources.readingId, id)).orderBy(asc(readingSources.idx));
   return { row, sources, dto: readingDTO(row, sources.length) };
+}
+export async function getReadingSummary(id: number) {
+  const [row] = await db.select({ id: readings.id, title: readings.title, language: readings.language, status: readings.status, overview: readings.overview, error: readings.error, revision: readings.revision, createdAt: readings.createdAt, expectedPageCount: readings.expectedPageCount })
+    .from(readings).where(eq(readings.id, id));
+  if (!row) return null;
+  const sources = await db.select({ idx: readingSources.idx, mime: readingSources.mime }).from(readingSources).where(eq(readingSources.readingId, id)).orderBy(asc(readingSources.idx));
+  return { row, sources, dto: readingSummaryDTO(row, sources.length) };
+}
+export async function getReadingDraftKeys(id: number) {
+  const [row] = await db.select({ keys: sql<string[]>`ARRAY(SELECT jsonb_object_keys(${readings.draft}))` })
+    .from(readings).where(eq(readings.id, id));
+  return new Set(row?.keys ?? []);
+}
+export async function getReadingSource(id: number, idx: number) {
+  const [source] = await db.select().from(readingSources).where(and(eq(readingSources.readingId, id), eq(readingSources.idx, idx)));
+  return source ?? null;
 }
 export async function loadReadingSession(id: number) {
   const [session] = await db.select().from(readingSessions).where(eq(readingSessions.id, id)); if (!session) return null;
@@ -52,4 +85,3 @@ export async function loadReadingSession(id: number) {
   const messages = await db.select().from(readingMessages).where(eq(readingMessages.sessionId, id)).orderBy(asc(readingMessages.id));
   return { session, tutor, reading: session.snapshot, messages };
 }
-export { MAX_PAPER_PAGES };

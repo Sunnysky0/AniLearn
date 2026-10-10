@@ -152,6 +152,7 @@ export const readings = pgTable("readings", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
   language: text("language").notNull().default("en"),
+  expectedPageCount: integer("expected_page_count").notNull().default(0),
   status: text("status").notNull().default("uploaded"),
   paragraphs: jsonb("paragraphs").$type<ReadingParagraph[]>().notNull().default([]),
   extracted: text("extracted").notNull().default(""),

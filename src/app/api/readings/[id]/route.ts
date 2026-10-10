@@ -1,13 +1,14 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { readings, readingSessions } from "@/db/schema";
-import { validId, getReading, paragraphsFromText, readingDTO } from "@/lib/server/readings";
+import { validId, getReading, getReadingSummary, paragraphsFromText, readingDTO } from "@/lib/server/readings";
 import { tryOperationLock } from "@/lib/server/locks";
-import { MAX_PAPER_TEXT_BYTES } from "@/lib/types";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string }> };
 export async function GET(_req: Request, ctx: Context) {
-  const id = validId((await ctx.params).id); const material = id && await getReading(id);
+  const id = validId((await ctx.params).id); const summary = id && await getReadingSummary(id);
+  const legacy = summary && summary.row.expectedPageCount === 0 ? await getReading(summary.row.id) : null;
+  const material = summary ? { ...summary, dto: legacy?.dto ?? summary.dto } : null;
   if (!material) return Response.json({ error: "材料不存在" }, { status: 404 });
   const classrooms = await db.select({ id: readingSessions.id, tutorId: readingSessions.tutorId, currentIdx: readingSessions.currentIdx, status: readingSessions.status }).from(readingSessions).where(eq(readingSessions.readingId, id as number));
   return Response.json({ reading: material.dto, sources: material.sources.map((s) => ({ idx: s.idx, mime: s.mime })), sessions: classrooms });
@@ -17,7 +18,8 @@ export async function PATCH(req: Request, ctx: Context) {
   const release = await tryOperationLock("reading", id); if (!release) return Response.json({ error: "材料正在处理" }, { status: 409 });
   try {
     const material = await getReading(id); if (!material) return Response.json({ error: "材料不存在" }, { status: 404 });
-    const body = await req.json(); if (typeof body.text !== "string" || Buffer.byteLength(body.text) > MAX_PAPER_TEXT_BYTES) return Response.json({ error: "原文无效或过大" }, { status: 400 });
+    if (material.row.expectedPageCount > 0) return Response.json({ error: "请逐页保存校对，再确认全部原文" }, { status: 409 });
+    const body = await req.json(); if (typeof body.text !== "string") return Response.json({ error: "原文无效" }, { status: 400 });
     if (body.revision !== material.row.revision) return Response.json({ error: "材料已变化，请刷新" }, { status: 409 });
     const revision = material.row.revision + 1; const paragraphs = paragraphsFromText(body.text, revision, material.sources.map((source) => material.row.draft[String(source.idx)] ?? ""));
     const [row] = await db.update(readings).set({ extracted: body.text.trim(), paragraphs, revision, status: "ready", error: null }).where(eq(readings.id, id)).returning();

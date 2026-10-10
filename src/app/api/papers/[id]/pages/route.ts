@@ -24,6 +24,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!parsed || (!isImage && !isText)) {
     return Response.json({ error: "仅支持 JPG / PNG / WEBP 图片或 Markdown / LaTeX 文本" }, { status: 400 });
   }
+  if (isImage && parsed.data.length < 4) return Response.json({ error: "图片数据无效" }, { status: 400 });
   if (parsed.data.length > (isText ? 2_000_000 : 12_000_000)) return Response.json({ error: isText ? "文本文件过大，单个文件最多 1.5 MB。" : "图片过大" }, { status: 413 });
   if (isText) {
     if (parsed.data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(parsed.data)) {

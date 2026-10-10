@@ -28,6 +28,34 @@ export async function fileToJpegDataUrl(file: Blob, maxSide = 2000, quality = 0.
   }
 }
 
+export async function fileToJpegBlob(file: Blob, maxSide = 2000, quality = 0.86): Promise<Blob> {
+  const url = URL.createObjectURL(file);
+  let canvas: HTMLCanvasElement | null = null;
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("无法读取该图片（可能是不支持的格式，如 HEIC）"));
+      i.src = url;
+    });
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("浏览器不支持 Canvas");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const renderingCanvas = canvas;
+    const blob = await new Promise<Blob>((resolve, reject) => renderingCanvas.toBlob((value) => value ? resolve(value) : reject(new Error("图片转换失败。")), "image/jpeg", quality));
+    return blob;
+  } finally {
+    if (canvas) { canvas.width = 0; canvas.height = 0; }
+    URL.revokeObjectURL(url);
+  }
+}
+
 export async function fileToPaperText(file: File): Promise<{ dataUrl: string; mime: string; text: string }> {
   if (file.size > MAX_PAPER_TEXT_BYTES) throw new Error("文本文件过大，单个文件最多 1.5 MB。");
   const bytes = await file.arrayBuffer();
@@ -112,6 +140,51 @@ export async function pdfToImages(
   }
   return out;
   } finally { await task.destroy(); }
+}
+
+export async function pdfToImageBlobs(
+  file: File,
+  onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<Blob[]> {
+  const pdfjs = await loadPdfJs();
+  signal?.throwIfAborted();
+  const task = pdfjs.getDocument({ data: await file.arrayBuffer() });
+  let destroyed: Promise<void> | null = null;
+  const destroy = () => destroyed ??= task.destroy();
+  const abort = () => { void destroy().catch(() => { /* The render reports cancellation. */ }); };
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    signal?.throwIfAborted();
+    const doc = await task.promise;
+    const out: Blob[] = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      signal?.throwIfAborted();
+      const page = await doc.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const scale = Math.min(3, 2000 / Math.max(base.width, base.height));
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      try {
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("浏览器不支持 Canvas");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+        out.push(await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error(`PDF 第 ${i} 页转换失败。`)), "image/jpeg", 0.86)));
+        onProgress?.(i, doc.numPages);
+      } finally {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    }
+    return out;
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    await destroy();
+  }
 }
 
 export function downloadText(filename: string, text: string, mime = "text/markdown;charset=utf-8") {

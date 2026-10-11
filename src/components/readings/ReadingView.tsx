@@ -4,13 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Loader2, Play, ScanSearch, Save, Trash2 } from "lucide-react";
-import type { ReadingAnalysisStatus, ReadingDTO, TutorDTO } from "@/lib/types";
+import type { ReadingAnalysisStatus, ReadingDTO, ReadingLearningState, TutorDTO } from "@/lib/types";
 
 interface ReadingSource { idx: number; mime: string }
 interface PageDraft { text: string; savedText: string; recognized: boolean; revision: number }
 const input = "w-full border border-neutral-300 bg-white px-3 py-2 text-sm";
 
-export default function ReadingView({ initial, sources, tutors, classrooms }: { initial: ReadingDTO; sources: ReadingSource[]; tutors: TutorDTO[]; classrooms: { id: number; currentIdx: number; status: string }[] }) {
+export default function ReadingView({ initial, sources, tutors, classrooms }: { initial: ReadingDTO; sources: ReadingSource[]; tutors: TutorDTO[]; classrooms: { id: number; currentIdx: number; status: string; learningState: ReadingLearningState | null }[] }) {
   const router = useRouter();
   const [reading, setReading] = useState(initial);
   const pagedWorkflow = (reading.expectedPageCount ?? 0) > 0;
@@ -204,7 +204,11 @@ export default function ReadingView({ initial, sources, tutors, classrooms }: { 
       </section>
       <aside className="space-y-5 border-t-2 border-neutral-900 py-5"><h2 className="font-semibold">阅读导师</h2><select aria-label="阅读导师" value={tutorId} onChange={(event) => setTutorId(Number(event.target.value))} className="w-full border bg-white p-2">{tutors.map((tutor) => <option key={tutor.id} value={tutor.id}>{tutor.name}</option>)}</select><button disabled={busy || reading.status !== "ready" || (pagedWorkflow ? pageDirty : text !== reading.extracted)} onClick={() => void startClassroom()} className="ink-button w-full justify-center px-4 py-3 disabled:opacity-40"><Play className="h-4 w-4" />开始导读</button>
         <h2 className="font-semibold">来源</h2>{sources.slice(Math.max(0, pageIdx - 2), pageIdx + 3).map((source) => <a key={source.idx} href={`/api/readings/${reading.id}/sources/${source.idx}`} target="_blank" rel="noreferrer" className="block border-b py-2 text-sm">第 {source.idx + 1} 页 · {source.mime.startsWith("image/") ? "图片" : "文本"}</a>)}
-        {classrooms.length > 0 && <h2 className="font-semibold">阅读记录</h2>}{classrooms.map((classroom) => <Link key={classroom.id} className="block border-b py-2 text-sm" href={`/reading-classroom/${classroom.id}`}>{classroom.status === "completed" ? "本篇已读完" : `继续第 ${classroom.currentIdx + 1} 段`}</Link>)}
+        {classrooms.length > 0 && <h2 className="font-semibold">阅读记录</h2>}{classrooms.map((classroom) => {
+          const learning = classroom.learningState;
+          const label = learning?.analysisCompletedAt ? "文章分析已完成 · 查看课堂" : learning?.phase === "article_analysis" ? "继续文章分析" : !learning && classroom.status === "completed" ? "历史逐段导读完成 · 整篇分析未开始" : "继续自由阅读";
+          return <Link key={classroom.id} className="block border-b py-2 text-sm" href={`/reading-classroom/${classroom.id}`}>{label}</Link>;
+        })}
       </aside>
     </div>
     {error && <p className="mt-4 text-sm text-red-700" role="alert">{error}</p>}

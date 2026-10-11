@@ -22,6 +22,9 @@ import type {
   TeachingPace,
   ReadingParagraph,
   ReadingDTO,
+  ReadingLearningState,
+  ReadingAnalysisDraft,
+  ReadingSelection,
 } from "../lib/types";
 import { DEFAULT_TUTOR_AVATAR } from "../lib/types";
 
@@ -176,8 +179,34 @@ export const readingSessions = pgTable("reading_sessions", {
   status: text("status").notNull().default("active"),
   progress: jsonb("progress").$type<Record<string, ProblemProgress>>().notNull().default({}),
   notes: jsonb("notes").$type<Record<string, string[]>>().notNull().default({}),
+  learningState: jsonb("learning_state").$type<ReadingLearningState>(),
+  analysisDraft: jsonb("analysis_draft").$type<ReadingAnalysisDraft>(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+export const readingTurns = pgTable("reading_turns", {
+  id: serial("id").primaryKey(),
+  sessionId: integer("session_id").notNull().references(() => readingSessions.id, { onDelete: "cascade" }),
+  requestId: text("request_id").notNull(),
+  inputHash: text("input_hash").notNull(),
+  phase: text("phase").notNull(),
+  focus: text("focus"),
+  intent: text("intent"),
+  status: text("status").notNull().default("running"),
+  action: text("action"),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("reading_turns_session_request_uq").on(t.sessionId, t.requestId), index("reading_turns_session_idx").on(t.sessionId, t.id)]);
+export const readingPersonalNotes = pgTable("reading_personal_notes", {
+  id: serial("id").primaryKey(),
+  sessionId: integer("session_id").notNull().references(() => readingSessions.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull(),
+  kind: text("kind").notNull(),
+  content: text("content").notNull().default(""),
+  selection: jsonb("selection").$type<ReadingSelection | null>(),
+  revision: integer("revision").notNull().default(0),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("reading_personal_notes_session_client_uq").on(t.sessionId, t.clientId), index("reading_personal_notes_session_idx").on(t.sessionId, t.id)]);
 export const readingMessages = pgTable("reading_messages", {
   id: serial("id").primaryKey(),
   sessionId: integer("session_id").notNull().references(() => readingSessions.id, { onDelete: "cascade" }),
@@ -186,7 +215,10 @@ export const readingMessages = pgTable("reading_messages", {
   language: text("language").notNull().default("zh-CN"),
   content: text("content").notNull(), speech: text("speech").notNull().default(""),
   attachments: jsonb("attachments").$type<string[]>().notNull().default([]),
-}, (t) => [index("reading_messages_session_idx").on(t.sessionId, t.id)]);
+  turnId: integer("turn_id").references(() => readingTurns.id, { onDelete: "cascade" }),
+  phase: text("phase"), focus: text("focus"),
+  selection: jsonb("selection").$type<ReadingSelection | null>(),
+}, (t) => [index("reading_messages_session_idx").on(t.sessionId, t.id), index("reading_messages_turn_idx").on(t.turnId, t.id)]);
 
 export const boards = pgTable(
   "boards",

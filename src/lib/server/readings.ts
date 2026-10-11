@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { readings, readingSources, readingSessions, readingMessages, tutors } from "@/db/schema";
-import { MAX_PAPER_TEXT_BYTES, type ReadingDTO, type ReadingMessage, type ReadingSessionDTO, type ReadingParagraph } from "@/lib/types";
+import { readings, readingSources, readingSessions, readingMessages, readingPersonalNotes, tutors } from "@/db/schema";
+import { MAX_PAPER_TEXT_BYTES, type ReadingDTO, type ReadingMessage, type ReadingSessionDTO, type ReadingParagraph, type ReadingLearningState, type ReadingPersonalNote } from "@/lib/types";
 import { parseDataUrl } from "./llm";
 import { decodePaperText } from "@/lib/paper-source";
 
@@ -15,11 +15,28 @@ type ReadingSummaryRow = Pick<typeof readings.$inferSelect, "id" | "title" | "la
 export function readingSummaryDTO(row: ReadingSummaryRow, pageCount = 0): ReadingDTO {
   return { id: row.id, title: row.title, language: row.language === "ja" ? "ja" : "en", status: row.status, paragraphs: [], extracted: "", overview: row.overview, error: row.error, revision: row.revision, createdAt: row.createdAt.toISOString(), pageCount, expectedPageCount: row.expectedPageCount };
 }
+export function initialReadingLearningState(row: Pick<typeof readingSessions.$inferSelect, "status" | "progress" | "notes">): ReadingLearningState {
+  return {
+    phase: "free_reading", stateRevision: 0, readingConfirmedAt: null,
+    articleKind: null, articleKindSource: null, currentFocus: null,
+    focusStatus: { structure: "not_started", writing: "not_started", theme: "not_started", emotion: "not_started", technique: "not_started" },
+    analysisNotes: {}, summary: "", analysisCompletedAt: null,
+    legacy: { status: row.status, progress: row.progress, notes: row.notes },
+  };
+}
 export function readingSessionDTO(row: typeof readingSessions.$inferSelect): ReadingSessionDTO {
-  return { id: row.id, readingId: row.readingId, tutorId: row.tutorId, currentIdx: row.currentIdx, status: row.status, progress: row.progress, notes: row.notes, updatedAt: row.updatedAt.toISOString() };
+  return {
+    id: row.id, readingId: row.readingId, tutorId: row.tutorId, currentIdx: row.currentIdx,
+    status: row.status, progress: row.progress, notes: row.notes,
+    learning: row.learningState ?? initialReadingLearningState(row), updatedAt: row.updatedAt.toISOString(),
+  };
 }
 type ReadingMessageRow = typeof readingMessages.$inferSelect;
 type ReadingMessageMetadata = Omit<ReadingMessageRow, "attachments"> & { attachmentCount: number };
+export function readingPersonalNoteDTO(row: typeof readingPersonalNotes.$inferSelect): ReadingPersonalNote {
+  return { id: row.id, clientId: row.clientId, kind: row.kind as ReadingPersonalNote["kind"], content: row.content,
+    selection: row.selection, revision: row.revision, updatedAt: row.updatedAt.toISOString() };
+}
 
 export function readingMessageDTO(row: Omit<ReadingMessageRow, "attachments"> & { attachments?: string[]; attachmentCount?: number }): ReadingMessage {
   const attachmentCount = row.attachmentCount ?? row.attachments?.length ?? 0;
@@ -27,6 +44,8 @@ export function readingMessageDTO(row: Omit<ReadingMessageRow, "attachments"> & 
     id: row.id, role: row.role as ReadingMessage["role"], content: row.content, speech: row.speech,
     paragraphIdx: row.paragraphIdx, kind: row.kind as ReadingMessage["kind"],
     language: row.language as ReadingMessage["language"], attachmentCount,
+    phase: row.phase === "free_reading" || row.phase === "article_analysis" ? row.phase : "legacy",
+    focus: row.focus as ReadingMessage["focus"], selection: row.selection,
     attachments: Array.from({ length: attachmentCount }, (_, index) =>
       "/api/reading-sessions/" + row.sessionId + "/messages/" + row.id + "/attachments/" + index),
   };
@@ -96,6 +115,8 @@ export async function loadReadingSession(id: number) {
     id: readingMessages.id, sessionId: readingMessages.sessionId, paragraphIdx: readingMessages.paragraphIdx,
     role: readingMessages.role, kind: readingMessages.kind, language: readingMessages.language,
     content: readingMessages.content, speech: readingMessages.speech,
+    phase: readingMessages.phase, focus: readingMessages.focus, selection: readingMessages.selection,
+    turnId: readingMessages.turnId,
     attachmentCount: sql<number>`jsonb_array_length(${readingMessages.attachments})::int`,
   }).from(readingMessages).where(eq(readingMessages.sessionId, id)).orderBy(asc(readingMessages.id));
   return { session, tutor, reading: session.snapshot, messages };

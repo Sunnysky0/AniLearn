@@ -360,17 +360,71 @@ export interface ReadingMessage {
   language: "zh-CN" | ReadingLanguage;
   attachments: string[];
   attachmentCount: number;
+  phase?: ReadingPhase | "legacy";
+  focus?: ReadingFocus | null;
+  selection?: ReadingSelection | null;
+}
+export type ReadingPhase = "free_reading" | "article_analysis";
+export type ReadingFocus = "structure" | "writing" | "theme" | "emotion" | "technique";
+export type ReadingFocusStatus = "not_started" | "in_progress" | "confirmed";
+export interface ReadingSelectionSegment {
+  paragraphId: string;
+  start: number;
+  end: number;
+  quote: string;
+  prefix: string;
+  suffix: string;
+}
+export interface ReadingSelection { segments: ReadingSelectionSegment[] }
+export interface ReadingLearningState {
+  phase: ReadingPhase;
+  stateRevision: number;
+  readingConfirmedAt: string | null;
+  articleKind: "general" | "literary" | null;
+  articleKindSource: "automatic" | "user" | null;
+  currentFocus: ReadingFocus | null;
+  focusStatus: Record<ReadingFocus, ReadingFocusStatus>;
+  analysisNotes: Partial<Record<ReadingFocus, string>>;
+  summary: string;
+  analysisCompletedAt: string | null;
+  legacy: { status: string; progress: Record<string, ProblemProgress>; notes: Record<string, string[]> } | null;
+}
+export interface ReadingPersonalNote {
+  id: number;
+  clientId: string;
+  kind: "document" | "annotation";
+  content: string;
+  selection: ReadingSelection | null;
+  revision: number;
+  updatedAt: string;
+}
+export interface ReadingAnalysisDraft {
+  status: "idle" | "running" | "ready" | "failed";
+  requestId?: string | null;
+  sourceRevision: number;
+  totalChunks: number;
+  chunks: Record<string, { start: number; end: number; summary: string }>;
+  merges: Record<string, string>;
+  context: string;
+  articleKind: "general" | "literary" | null;
+  error: string | null;
 }
 export interface ReadingTurnRequest {
+  requestId: string;
+  phase: ReadingPhase;
+  stateRevision: number;
+  focus?: ReadingFocus | null;
+  selection?: ReadingSelection | null;
   text?: string;
   images?: string[];
-  intent?: "next" | "goodbye";
-  paragraphIdx: number;
+  intent?: "continue" | "goodbye" | "analysis_summary";
+  paragraphIdx?: number;
 }
 export interface ReadingSessionDTO {
   id: number; readingId: number; tutorId: number; currentIdx: number;
   status: string; progress: Record<string, ProblemProgress>;
   notes: Record<string, string[]>; updatedAt: string;
+  learning: ReadingLearningState;
 }
 export type FreeMessageKind = "text" | "board" | "quote" | "example" | "exercise" | "feedback";
 export type FreeTurnIntent = "greeting" | "continue" | "goodbye";
@@ -408,7 +462,8 @@ export type FreeTurnEvent =
 export type ReadingTurnEvent =
   | { type: "message"; message: ReadingMessage }
   | { type: "notes"; paragraphIdx: number; notes: string[] }
-  | { type: "done"; session: ReadingSessionDTO; action: TurnAction; goodbye?: boolean }
+  | { type: "analysis"; learning: ReadingLearningState }
+  | { type: "done"; session: ReadingSessionDTO; action: TurnAction; goodbye?: boolean; requestId: string }
   | { type: "error"; error: string };
 
 export interface VoiceItem {

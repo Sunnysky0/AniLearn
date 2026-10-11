@@ -15,7 +15,7 @@ Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). 
 ## Product charter
 
 - **EPDL (Exam Paper Driven Learning).** The paper supplies a complete stable inventory. Five paces select representative problems and concrete goals before detailed analysis. Default pace is 纲举目张; only 条分缕析 and legacy sessions require all problems and all four core topics.
-- **Readings.** Independent English/Japanese articles, unlimited source pages, background per-page OCR, paginated source review, reading sessions, notes and open dialogue exercises. OCR resumes from saved pages after failure or restart. Chinese explanation and labeled foreign quotes/examples are separate content types; speech remains Japanese.
+- **Readings.** Independent English/Japanese articles, unlimited source pages, background per-page OCR, paginated source review, and two-stage sessions: silent free reading with user-initiated questions/notes, followed by guided whole-article analysis. OCR and long-article context preparation resume from saved work after failure or restart. User notes stay separate from tutor analysis. Chinese explanation and labeled foreign quotes/examples are separate content types; speech remains Japanese.
 - **Custom tutors.** Personality, teaching style, speaking style, avatar, greeting, and Fish Audio voice (`voiceId` + Japanese `voiceStyle` tag). Every tutor can teach every subject; the database subject column is retained only for compatibility.
 - **Models.** OpenAI / Anthropic / Grok (xAI) / Gemini, via API. No vendor SDKs — raw `fetch` + SSE in `src/lib/server/llm.ts`.
 - **Voice.** Fish Audio TTS (`s2.1-pro`). Chat and board are Chinese; spoken audio is Japanese. Text in the chat bubble reveals in sync with playback.
@@ -34,6 +34,9 @@ Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). 
 | Learning plan | Versioned pace, request and ordered representative units with related problems, reason and concrete goal IDs. Pending supplements require explicit confirmation; unselected items are not mastery. |
 | Connection | Named protocol, URL, server-side key and optional legacy environment fallback. Chat and analysis independently bind connection ID + free-form model name. |
 | Session | One classroom sitting: one paper + one tutor, with a paper/problem snapshot. Progress is per-problem `pending` \| `active` \| `done`. |
+| Reading phase | One reading classroom phase: `free_reading` keeps the tutor silent until a student asks; `article_analysis` guides whole-article structure, writing, and theme analysis, with emotion and technique for literary work. |
+| Reading focus | An ordered article-analysis angle: `structure`, `writing`, `theme`, and for literary work `emotion` and `technique`. A student explicitly confirms each completed angle. |
+| Reading selection | A validated, stable-ID text anchor in the immutable reading-session snapshot. It supplies context for questions and private annotations. |
 | Coverage | Per-session, per-problem evidence for `solution`, `knowledge`, `skills`, and `pitfalls`, stored in `sessions.coverage`. |
 | Turn | One main tutor LLM call, with optional message/board repair calls. Streams NDJSON `TurnEvent`s. Ends with `wait` \| `continue` \| `next` \| `finish` on success. |
 | Board | Per-problem chalkboard page. Blocks of Markdown/LaTeX the student can treat as notes. |
@@ -89,7 +92,10 @@ API (all `force-dynamic`):
 | `GET /api/readings/:id/analysis-status` | Lightweight completed/total/current-page status, revision and resumability using the reading operation lock; no source payloads or full drafts. |
 | `GET/PATCH /api/readings/:id/pages/:idx` | Read or save one recognized source page; saves require the current material revision. Empty recognized pages are complete. |
 | `POST /api/readings/:id/confirm` | Accept only `{ revision }`; require every expected page and generate full text plus paragraphs in source order, atomically setting `ready`. Legacy articles retain their full-text PATCH endpoint until background re-recognition. |
-| `POST /api/reading-sessions/:id/turn` | Reading lesson turn. Body `{ text?, images?, intent?: "next" \| "goodbye", paragraphIdx }`; images are student-message attachments, not reading sources. Streams `ReadingTurnEvent` NDJSON. |
+| `POST /api/reading-sessions/:id/analysis` | Confirm the full article has been read and start or resume background whole-article context preparation. Returns `202`; context is saved in resumable chunks. |
+| `GET /api/reading-sessions/:id/analysis-status` | Lightweight full-article preparation status, progress and resumability; never returns the full draft. |
+| `GET/POST /api/reading-sessions/:id/notes` and `PATCH/DELETE /api/reading-sessions/:id/notes/:noteId` | Read and save a full-article learner notebook or anchored annotations. Per-note revisions reject stale updates. |
+| `POST /api/reading-sessions/:id/turn` | Reading question or guided-analysis turn. Body includes a stable `requestId`, `phase`, `stateRevision`, optional `focus`, validated `selection`, `text`, `images`, and optional `continue`, `goodbye`, or `analysis_summary` intent. Streams `ReadingTurnEvent` NDJSON. Messages never advance article-analysis progress; the student confirms focus and completion explicitly. |
 | `GET /api/reading-sessions/:id/messages/:messageId/attachments/:idx` | Read one saved reading-classroom message image. |
 | `POST /api/papers/:id/analyze` | Inventory then per-problem vision analysis, streamed as NDJSON `AnalysisEvent`. Body `{ restart?: boolean }`; default resumes saved draft. Continues after browser disconnect. |
 | `PATCH/DELETE /api/papers/:id` | Edit/delete under the paper lock. Subject cannot change after publication or while a draft exists. |
@@ -104,7 +110,7 @@ API (all `force-dynamic`):
 Settings keys: DB row `app_settings.id = 1`, else env. Provider env: `OPENAI_API_KEY`; `ANTHROPIC_API_KEY` / `CLAUDE_API_KEY`; `XAI_API_KEY` / `GROK_API_KEY`; `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`. Fish: `FISH_API_KEY` / `FISH_AUDIO_API_KEY`. Default Fish model `s2.1-pro`. Default voice `db1553e441c84b49bf250912563ec8fc`.
 
 DB (Drizzle, `src/db/schema.ts`): `app_settings`, `tutors`, `papers`, `paper_pages` (base64 image or UTF-8 text per source page, identified by MIME), `problems`, `sessions`, `messages`, `boards` (unique on session+problemIdx). Text sources use `text/markdown`, `text/x-tex`, or `application/x-tex`; send their decoded source to the LLM as text, never as an image. Do not compile TeX or resolve external file dependencies. `PaperDTO.pageMimes` is optional for legacy snapshots and enables source-aware previews.
-`reading_messages` also stores chat attachments in an additive JSONB `attachments` column with a default empty array. Use the existing `npm run db:push` flow to synchronize this addition before starting the updated app.
+`reading_sessions.learning_state` stores two-phase teaching progress; `analysis_draft` stores resumable whole-article context preparation. `reading_turns` provides idempotent streaming-turn replay, and `reading_personal_notes` stores learner-owned notes with independent revisions. `reading_messages` also stores chat attachments, phase/focus metadata and validated source anchors. Apply additive reading changes with `npm run db:push`, or review `docs/migrations/20261011-reading-two-phase-learning.sql`; keep the earlier attachment migration when upgrading from a pre-attachment database.
 
 Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullable for legacy sessions), and `sessions.coverage` (default `{}`). Sync schema before running this version in another environment. Do not remove these fields or use a destructive schema reset to resolve migration issues.
 
@@ -117,6 +123,7 @@ Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullab
 - Analysis continues when its browser stream disconnects. A process restart stops the task, but preserves completed draft work. The student must click to resume; there is no durable job worker or automatic restart.
 - Reading OCR starts after every expected source page uploads, runs with Next.js `after`, saves each recognized page in `readings.draft`, and continues when the browser closes. A process restart leaves the saved pages intact; the article page reports an unlocked stale run as resumable.
 - Reading OCR reads only the current source payload, makes at most two image-recognition attempts per page, and saves outside the retry loop. `[空白页]` stores an empty draft value whose key still counts as complete. Reading tasks have no whole-article deadline; every LLM call retains its 180-second timeout. Confirmation has no aggregate 1.5 MB or 1,000-paragraph cap, but each imported text source retains its 1.5 MB cap. The reading classroom renders 50 source paragraphs per group.
+- Reading classrooms start in `free_reading` without a model or TTS request. Text selection is verified against the session snapshot; bookmark movement is independent of article-analysis focus. `article_analysis` uses saved per-chunk context, a separate preparation lock, and a manual resume after failure/restart. Three general and five literary analysis angles require explicit student confirmation. Personal notes are isolated from tutor-generated analysis, with per-note revision checks. Legacy reading progress stays visible as history and never implies article-analysis completion.
 - `tryOperationLock` must reserve a connection from the separate lock pool, never the database work pool. Release on success, failure, cancellation, and pre-stream errors. Keep paper/session lock namespaces consistent across app processes.
 - Serialize session generation, jumps, and deletion. A `409` means another operation owns the lock. Client retries must be bounded; do not remove server locks to make an interrupted request succeed.
 - Only accept coverage quotes of at least six non-whitespace characters that appear in actual tutor Chinese messages or board content. Normal tags reference the current turn; completion may make one bounded repair call using saved teaching from this session and problem, never student input, other problems, or reference solutions. Reject headings and completion declarations as evidence. Persist coverage by problem index.
@@ -163,6 +170,7 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 - Japanese board text/title is translated through a separate repair call and checked again. `/api/tts` also validates speech before contacting Fish.
 - `SpeechAudioController` owns browser TTS requests, in-flight deduplication, cached object URLs, cancellation and cleanup. Every complete valid Chinese tutor message with Japanese speech starts prefetch immediately in all three classrooms; playback awaits the same request result and remains FIFO. Settings and tutor previews use the same requester, while settings previews preserve `fresh: true`.
 - Follow `docs/tts-emotion-tags.md`: S2/S2.1 cues use square brackets and concise free-form descriptions (Japanese descriptions are valid). Every playable tutor speech starts with a primary emotion/style cue; preserve existing cues during repair and add the tutor's base style when absent. Keep cues only in speech, with Japanese spoken text. Do not impose an English-only whitelist or silently convert S2 cues for legacy S1.
+- UI acceptance for reading-classroom changes uses the `$playwright` skill's `playwright-cli` wrapper and saves artifacts under `output/playwright/`. Do not use `@playwright/test` unless the user asks for test files.
 - Muted mode must skip voice prefetch, synthesis, and replay. Use the text reveal timer directly; never wait for inaudible playback.
 - The message request body is limited to 12 MiB. Shared server validation rejects more than 4,000 text code points, more than four images, unsupported image MIME types, invalid base64 or an image exceeding 2 MiB; never silently truncate a classroom message.
 - Current limits: LLM call 180 seconds, full tutor turn 270 seconds, full analysis 750 seconds, Fish request 12 seconds, browser TTS request 15 seconds. Preserve cancellation and text fallback when changing these limits.
@@ -209,6 +217,7 @@ npm run typecheck    # tsc --noEmit
 npm run google-docs:test # link validation and Google Docs export safety checks
 npm run launcher     # Windows full-screen TUI; auto-start app and PostgreSQL
 npm run launcher:test # launcher core and terminal-layout regression tests
+npm run reading:test  # reading phase and source-selection validation
 codegraph sync       # update the code index after code changes
 ```
 

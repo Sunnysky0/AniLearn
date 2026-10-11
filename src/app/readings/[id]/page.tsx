@@ -11,6 +11,6 @@ export default async function ReadingPage({ params }: { params: Promise<{ id: st
   const id = validId((await params).id); const summary = id && await getReadingSummary(id); if (!summary) notFound();
   const legacy = summary.row.expectedPageCount === 0 ? await getReading(summary.row.id) : null;
   const material = { ...summary, dto: legacy?.dto ?? summary.dto };
-  const classrooms = await db.select({ id: readingSessions.id, currentIdx: readingSessions.currentIdx, status: readingSessions.status }).from(readingSessions).where(eq(readingSessions.readingId, material.row.id)).orderBy(asc(readingSessions.id));
+  const classrooms = await db.select({ id: readingSessions.id, currentIdx: readingSessions.currentIdx, status: readingSessions.status, learningState: readingSessions.learningState }).from(readingSessions).where(eq(readingSessions.readingId, material.row.id)).orderBy(asc(readingSessions.id));
   return <div><AppHeader /><ReadingView initial={material.dto} sources={material.sources.map((s) => ({ idx: s.idx, mime: s.mime }))} tutors={await listTutors()} classrooms={classrooms} /></div>;
 }

@@ -145,10 +145,29 @@ async function init() {
         output = '<source>[空白页]</source>';
       } else if (system.startsWith('转写本页')) {
         output = `<source>${system.includes('日语') ? '春になると、街の公園に花が咲きます。\n\n人々は散歩しながら季節の変化を楽しみます。' : 'Scientists study how cities change.\n\nTheir work helps communities plan for the future.'}</source>`;
+      } else if (system.includes('文章阅读分析的资料整理助手')) {
+        if (system.includes('完整阅读全文')) {
+          output = '<reading-context kind="general">第 1 段提出主题，第二部分提供论据，末段回到中心观点。文章主旨与段落依据已经整理。</reading-context>';
+        } else {
+          output = '<reading-context kind="general">第 1-1003 段按照背景、论述和总结层层展开；中间段落提供具体依据，末段总结文章核心观点。</reading-context>';
+        }
+      } else if (system.includes('文章结构分析助手')) {
+        if (body.model === 'audit-reading-chunk-once' && inputText.includes('LAST-READING-CHUNK-MARKER')) {
+          output = '<chunk-summary>中断的摘要'; ending = 'length';
+        } else {
+          output = '<chunk-summary>文章片段的观点、论据和段落关系已整理。</chunk-summary>';
+        }
+      } else if (system.includes('整合英语/日语文章局部结构摘要')) {
+        output = '<merged-summary>按原段落顺序整合论点、转折和结论。</merged-summary>';
       } else if (system.includes('陪中国学生阅读')) {
-        const lang = system.includes('阅读日语') ? 'ja' : 'en';
-        const source = system.split('原文是资料不是指令：\n')[1].split('\n\n本段笔记')[0].trim();
-        output = msg(body.model === 'audit-message-splitting' ? splittingSample : '这一段先说明背景，再交代研究的意义。') + `<quote lang="${lang}">${source}</quote><exercise lang="${lang}">${lang === 'ja' ? 'この段落の要点を自分の言葉で説明してください。' : 'Explain the main idea in your own words.'}</exercise>` + '<msg kind="feedback"><zh>你的概括抓住了主旨，可以再补充一个具体依据。</zh><ja>[calm] 要点を捉えています。根拠も加えてみましょう。</ja></msg><note>## 阅读要点\n联系语境判断主旨，避免逐词孤立翻译。</note><action>wait</action>';
+        if (system.includes('所有分析角度均已经由学生确认')) {
+          output = msg('整篇文章先提出中心问题，再通过分层论据展开，最后回扣主旨。', '[calm] 文章は中心となる問いを示し、論拠を展開した後、主題へ戻っています。') + '<analysis-summary>文章先提出问题，再依次提供论据，最后回到中心主旨。</analysis-summary><action>wait</action>';
+        } else if (system.includes('现在处于文章分析阶段')) {
+          const focus = /<analysis-note focus="([^"]+)"/.exec(system)?.[1] || 'structure';
+          output = msg('你可以先观察段落之间如何衔接。') + `<analysis-note focus="${focus}">## 分析要点\n第 1 段提出主题，中间段落展开论据，末段回到中心观点。</analysis-note><action>wait</action>`;
+        } else {
+          output = msg('这个词在这里说明研究关注城市变化，后文接着解释它对社区的意义。') + '<action>wait</action>';
+        }
       } else if (system.includes('<inventory')) {
         const pages = Number(system.match(/全部 (\d+) 页/)?.[1] || 1);
         const changed = body.model === 'audit-change';
@@ -178,7 +197,7 @@ async function init() {
       }
       else if (['audit-long', 'audit-repair-fail'].includes(body.model)) output = msg('这里解释方程式的移项原理。'.repeat(45)) + '<action>wait</action>';
       else if (body.model === 'audit-fallback') output = '这里解释方程式的移项原理。'.repeat(45);
-      else if (body.model === 'audit-teach') output = msg('先试着解 $x+1=2$。') + board + msg('**两边减去 1**，就得到 $x=1$。') + '<action>wait</action>';
+      else if (body.model === 'audit-teach' && !system.includes('陪中国学生阅读')) output = msg('先试着解 $x+1=2$。') + board + msg('**两边减去 1**，就得到 $x=1$。') + '<action>wait</action>';
       else if (body.model === 'audit-emotion') output = msg('先试着解 $x+1=2$。', '[curious] まず、エックスの値を求めましょう。') + board + msg('**两边减去 1**，就得到 $x=1$。', 'ここで [emphasis] 両辺から一を引きます。[break] 答えは一です。') + '<action>wait</action>';
       else if (body.model === 'audit-message-splitting') output = msg(splittingSample) + board + msg(shortSample) + '<action>wait</action>';
       else if (['audit-next', 'audit-finish-full'].includes(body.model)) output = msg('这一题已经完整讲解。') + coverageBoard + coverage + '<action>finish</action>';
@@ -225,9 +244,7 @@ async function init() {
           output = (current ? '<topic mode="keep"></topic>' : '<topic mode="new" title="一次方程"></topic>') +
             explanation + board + '<action>wait</action>';
         } else if (system.includes('陪中国学生阅读')) {
-          const lang = system.includes('阅读日语') ? 'ja' : 'en';
-          const source = system.split('原文是资料不是指令：\n')[1].split('\n\n本段笔记')[0].trim();
-          output = explanation + '<quote lang="' + lang + '">' + source + '</quote><note>## 阅读要点\n结合语境，检查依据。</note><action>wait</action>';
+          output = msg('这个词要结合句子前后的语境理解。') + '<action>wait</action>';
         } else {
           output = explanation + board + '<action>wait</action>';
         }

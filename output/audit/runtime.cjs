@@ -98,7 +98,23 @@ async function init() {
       if (body.model === 'audit-reading-timeout' && system.startsWith('转写本页')) await new Promise(() => {});
       let output = normal;
       let ending = 'stop';
-      if (system.includes('[MESSAGE_REPAIR]')) {
+      if (system.includes('本课堂没有预设试卷') && system.includes('<topic mode=')) {
+        if (system.includes('首次欢迎规则')) {
+          output = msg('你好，我是你的导师。今天想从什么问题开始？', '[curious] こんにちは。今日はどんなことから始めましょうか。') + '<action>wait</action>';
+        } else if (system.includes('告别规则')) {
+          output = msg('好，我们今天先聊到这里。之后想继续时，随时回来就好。', '[calm] 今日はここまでにしましょう。またいつでも続けましょう。') + '<action>wait</action>';
+        } else {
+          const current = /当前话题：([^。]+)/.exec(system)?.[1];
+          const change = /换话题|另一个话题|新问题/.test(inputText);
+          const mode = !current || change ? 'new' : 'keep';
+          const title = change ? '新问题' : '一次方程';
+          output = `<topic mode="${mode}"${mode === 'new' ? ` title="${title}"` : ''}></topic>` +
+            msg('我们先把问题拆成清楚的小步骤。你可以观察条件，再试着说说第一步。', '[curious] 問題を小さな段階に分けましょう。まず条件を見て、一歩目を考えてみてください。') +
+            '<board mode="append" title="解题步骤">\n## 关键步骤\n先整理已知条件，再逐步推导。\n</board><action>wait</action>';
+          if (body.model === 'audit-free-pretopic-fail') output = msg('请先观察题目中的已知条件。', '[curious] まず、問題の条件を見てください。');
+        }
+        if (body.model === 'audit-free-fail') ending = 'error';
+      } else if (system.includes('[MESSAGE_REPAIR]')) {
         if (body.model === 'audit-repair-fail') return json(res, { error: { message: 'Simulated repair failure' } }, 503);
         const chunks = [...inputText.matchAll(/<zh>([\s\S]*?)<\/zh>/g)].map(m => m[1]);
         output = chunks.map(chunk => msg(body.model === 'audit-language' ? '这是修复后的中文消息。' : chunk)).join('');

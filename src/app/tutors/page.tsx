@@ -48,9 +48,10 @@ export default async function TutorsPage() {
                     <Mic className="h-3 w-3" /> {t.voiceName || "自定义声音"} · {t.voiceStyle || "默认语气"}
                   </div>
                 </div>
-                <Link href={`/tutors/${t.id}`} className="paper-button mt-5 text-sm">
-                  <Pencil className="h-4 w-4" /> 编辑导师
-                </Link>
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <Link href={`/tutors/${t.id}`} className="paper-button text-sm"><Pencil className="h-4 w-4" /> 编辑导师</Link>
+                  <Link href={`/free?tutor=${t.id}`} className="ink-button text-sm"><Mic className="h-4 w-4" /> 自由提问</Link>
+                </div>
               </div>
             </div>
           ))}

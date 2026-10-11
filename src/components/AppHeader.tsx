@@ -22,6 +22,7 @@ const NAV = [
   { href: "/", label: "首页" },
   { href: "/papers", label: "试卷库" },
   { href: "/readings", label: "外刊导读" },
+  { href: "/free", label: "自由提问" },
   { href: "/tutors", label: "我的导师" },
   { href: "/settings", label: "设置" },
 ];

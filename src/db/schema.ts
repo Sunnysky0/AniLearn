@@ -201,3 +201,53 @@ export const boards = pgTable(
   },
   (t) => [uniqueIndex("boards_session_problem_uq").on(t.sessionId, t.problemIdx)],
 );
+
+export const freeSessions = pgTable("free_sessions", {
+  id: serial("id").primaryKey(),
+  tutorId: integer("tutor_id").notNull().references(() => tutors.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default(""),
+  currentTopicId: integer("current_topic_id"),
+  createdRequestId: text("created_request_id").notNull(),
+  welcomeRequestId: text("welcome_request_id").notNull(),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("free_sessions_create_request_uq").on(t.createdRequestId), index("free_sessions_updated_idx").on(t.updatedAt)]);
+
+export const freeTopics = pgTable("free_topics", {
+  id: serial("id").primaryKey(),
+  sessionId: integer("session_id").notNull().references(() => freeSessions.id, { onDelete: "cascade" }),
+  idx: integer("idx").notNull(),
+  title: text("title").notNull(),
+  blocks: jsonb("blocks").$type<BoardBlock[]>().notNull().default([]),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("free_topics_session_idx_uq").on(t.sessionId, t.idx), index("free_topics_session_idx").on(t.sessionId, t.idx)]);
+
+export const freeTurns = pgTable("free_turns", {
+  id: serial("id").primaryKey(),
+  sessionId: integer("session_id").notNull().references(() => freeSessions.id, { onDelete: "cascade" }),
+  requestId: text("request_id").notNull(),
+  intent: text("intent"),
+  inputHash: text("input_hash").notNull(),
+  requestedTopicId: integer("requested_topic_id").references(() => freeTopics.id, { onDelete: "set null" }),
+  topicId: integer("topic_id").references(() => freeTopics.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("running"),
+  action: text("action"),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("free_turns_session_request_uq").on(t.sessionId, t.requestId), index("free_turns_session_idx").on(t.sessionId, t.id)]);
+
+export const freeMessages = pgTable("free_messages", {
+  id: serial("id").primaryKey(),
+  sessionId: integer("session_id").notNull().references(() => freeSessions.id, { onDelete: "cascade" }),
+  turnId: integer("turn_id").references(() => freeTurns.id, { onDelete: "cascade" }),
+  topicId: integer("topic_id").references(() => freeTopics.id, { onDelete: "set null" }),
+  role: text("role").notNull(),
+  kind: text("kind").notNull().default("text"),
+  language: text("language").notNull().default("zh-CN"),
+  content: text("content").notNull().default(""),
+  speech: text("speech").notNull().default(""),
+  boardMode: text("board_mode"),
+  attachments: jsonb("attachments").$type<string[]>().notNull().default([]),
+  createdAt: createdAt(),
+}, (t) => [index("free_messages_session_idx").on(t.sessionId, t.id), index("free_messages_turn_idx").on(t.turnId, t.id)]);

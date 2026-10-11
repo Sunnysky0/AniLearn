@@ -8,6 +8,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "math:test": "tsx --test src/lib/math-markdown.test.ts src/components/Markdown.test.tsx",
+    "free:test": "node --import tsx --test src/lib/server/free-input.test.ts src/lib/server/free-prompts.test.ts src/lib/server/free-protocol.test.ts",
+    "free:audit": "node output/audit/free-mode-api.mjs",
     "google-docs:test": "node --import tsx --test src/lib/google-docs.test.ts",
     "db:up": "docker compose --env-file .env.local up -d --wait",
     "db:down": "docker compose --env-file .env.local down",

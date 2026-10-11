@@ -358,6 +358,39 @@ export interface ReadingSessionDTO {
   status: string; progress: Record<string, ProblemProgress>;
   notes: Record<string, string[]>; updatedAt: string;
 }
+export type FreeMessageKind = "text" | "board" | "quote" | "example" | "exercise" | "feedback";
+export type FreeTurnIntent = "greeting" | "continue" | "goodbye";
+export type FreeTurnAction = "wait" | "continue";
+export interface FreeSessionDTO {
+  id: number; tutorId: number; title: string; currentTopicId: number | null;
+  welcomeRequestId: string; createdAt: string; updatedAt: string;
+}
+export interface FreeSessionSummaryDTO {
+  session: Omit<FreeSessionDTO, "welcomeRequestId">;
+  tutor: Pick<TutorDTO, "id" | "name" | "avatar">;
+  topicCount: number; currentTopicTitle: string;
+}
+export interface FreeTopicDTO {
+  id: number; sessionId: number; idx: number; title: string; blocks: BoardBlock[];
+  createdAt: string; updatedAt: string;
+}
+export interface FreeMessageDTO {
+  id: number; sessionId: number; turnId: number | null; topicId: number | null;
+  role: "user" | "tutor"; kind: FreeMessageKind; language: "zh-CN" | "en" | "ja";
+  content: string; speech: string; boardMode: "append" | "replace" | null;
+  attachments: string[]; attachmentCount: number; createdAt: string;
+}
+export interface FreeTurnRequest {
+  requestId: string; text?: string; images?: string[]; topicId?: number | null;
+  intent?: FreeTurnIntent;
+}
+export type FreeTurnEvent =
+  | { type: "user"; requestId: string; message: FreeMessageDTO }
+  | { type: "topic"; requestId: string; topic: FreeTopicDTO; current?: boolean }
+  | { type: "message"; requestId: string; message: FreeMessageDTO }
+  | { type: "board"; requestId: string; topic: FreeTopicDTO; blockId: string; message: FreeMessageDTO }
+  | { type: "done"; requestId: string; action: FreeTurnAction }
+  | { type: "error"; requestId: string; error: string };
 export type ReadingTurnEvent =
   | { type: "message"; message: ReadingMessage }
   | { type: "notes"; paragraphIdx: number; notes: string[] }

@@ -6,9 +6,9 @@ import "@fontsource-variable/noto-serif-sc";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AniLearn · 试卷驱动的 AI 一对一导师",
+  title: "AniLearn · AI 一对一学习导师",
   description:
-    "AniLearn：上传试卷，AI 导师全面解析考点与教材知识点，逐题一对一讲解，配有真人语音与板书。专为高考设计。",
+    "AniLearn：试卷学习、外刊导读与自由提问，一对一 AI 导师配有中文讲解、日语语音与板书。",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

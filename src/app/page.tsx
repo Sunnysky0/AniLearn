@@ -1,6 +1,7 @@
 import Link from "next/link";
+import Image from "next/image";
 import { desc, eq, sql } from "drizzle-orm";
-import { AlertTriangle, ArrowRight, BookOpen, Check, FileUp } from "lucide-react";
+import { AlertTriangle, ArrowRight, BookOpen, Check, FileUp, MessageCircle } from "lucide-react";
 import { db } from "@/db";
 import { papers, problems, sessions, tutors } from "@/db/schema";
 import { AppHeader } from "@/components/AppHeader";
@@ -8,6 +9,7 @@ import { PaperCard } from "@/components/PaperCard";
 import { listTutors, paperPageMimes, toPaperDTO } from "@/lib/server/data";
 import { getSettings, isTTSReady, isLLMReady } from "@/lib/server/settings";
 import { formatDate } from "@/lib/text";
+import { listFreeSessions } from "@/lib/server/free-data";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +55,11 @@ export default async function HomePage() {
     .from(papers)
     .orderBy(desc(papers.createdAt))
     .limit(8);
+  const freeRecent = await listFreeSessions(6);
+  const recentItems = [
+    ...recent.map((record) => ({ kind: "paper" as const, at: record.updatedAt.getTime(), record })),
+    ...freeRecent.sessions.map((record) => ({ kind: "free" as const, at: new Date(record.session.updatedAt).getTime(), record })),
+  ].sort((a, b) => b.at - a.at).slice(0, 6);
   const llmReady = isLLMReady(settings, "chat");
   const ttsReady = isTTSReady(settings);
   const connection = settings.connections.find((c) => c.id === settings.models.chat.connectionId);
@@ -63,7 +70,7 @@ export default async function HomePage() {
       <main className="mx-auto max-w-7xl px-4 pb-14 pt-7 sm:px-6 sm:pt-10">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-5">
           <div>
-            <p className="mb-2 text-sm text-[#626262]">试卷驱动学习</p>
+            <p className="mb-2 text-sm text-[#626262]">试卷 · 外刊 · 自由提问</p>
             <h1 className="text-[32px] font-bold leading-tight">学习工作台</h1>
           </div>
           <Link href="/papers/new" className="ink-button text-sm">
@@ -96,14 +103,21 @@ export default async function HomePage() {
           <div className="min-w-0 space-y-10">
             <section>
               <SectionTitle title="继续学习" />
-              {recent.length > 0 ? (
+              {recentItems.length > 0 ? (
                 <div className="divide-y divide-[#c8c8c8]">
-                  {recent.map((r) => {
+                  {recentItems.map((item) => item.kind === "free" ? (
+                    <Link key={`free-${item.record.session.id}`} href={`/free-classroom/${item.record.session.id}`} className="group flex items-center gap-4 py-4 transition-colors hover:bg-[#eeeeee]">
+                      <Image src={item.record.tutor.avatar} width={56} height={56} alt={item.record.tutor.name} className="h-14 w-14 shrink-0 border border-[#c8c8c8] object-cover" />
+                      <div className="min-w-0 flex-1"><h3 className="line-clamp-2 text-lg font-semibold leading-relaxed">{item.record.session.title || `与${item.record.tutor.name}自由提问`}</h3><p className="mt-1 flex items-center gap-1 text-xs text-[#626262]"><MessageCircle className="h-3.5 w-3.5" />自由提问 · {item.record.tutor.name} · {item.record.currentTopicTitle || `${item.record.topicCount} 个话题`}</p></div>
+                      <div className="hidden shrink-0 text-right text-xs text-[#626262] sm:block"><p>对话已保存</p><p className="mt-1">{formatDate(item.record.session.updatedAt).slice(5)}</p></div><ArrowRight className="h-4 w-4 shrink-0" />
+                    </Link>
+                  ) : (() => {
+                    const r = item.record;
                     const done = r.plan ? r.plan.units.filter((u) => r.progress[String(u.idx)] === "done").length : Object.values(r.progress ?? {}).filter((v) => v === "done").length;
                     const total = r.plan?.units.length ?? (Number(r.total) || 1);
                     return (
                       <Link
-                        key={r.id}
+                        key={`paper-${r.id}`}
                         href={`/classroom/${r.id}`}
                         className="group flex items-center gap-4 py-4 transition-colors hover:bg-[#eeeeee]"
                       >
@@ -129,14 +143,14 @@ export default async function HomePage() {
                         <ArrowRight className="h-4 w-4 shrink-0" />
                       </Link>
                     );
-                  })}
+                  })())}
                 </div>
               ) : (
                 <div className="border-b border-[#c8c8c8] py-7">
                   <BookOpen className="mb-3 h-6 w-6 text-[#626262]" />
                   <p className="text-lg font-medium">尚无课堂记录</p>
-                  <Link href="/papers/new" className="mt-3 inline-flex items-center gap-2 text-sm underline">
-                    上传第一份试卷 <ArrowRight className="h-4 w-4" />
+                  <Link href="/free" className="mt-3 inline-flex items-center gap-2 text-sm underline">
+                    直接向导师提问 <ArrowRight className="h-4 w-4" />
                   </Link>
                 </div>
               )}
@@ -158,7 +172,7 @@ export default async function HomePage() {
             <SectionTitle title="我的导师" href="/tutors" linkLabel="管理" />
             <div className="divide-y divide-[#c8c8c8]">
               {tutorList.slice(0, 4).map((t) => (
-                <Link key={t.id} href={`/tutors/${t.id}`} className="flex items-start gap-3 py-4 hover:bg-[#eeeeee]">
+                <div key={t.id} className="flex items-start gap-3 py-4 hover:bg-[#eeeeee]">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={t.avatar}
@@ -170,7 +184,9 @@ export default async function HomePage() {
                     <p className="mt-1 text-xs text-[#626262]">{t.tags.join(" · ")}</p>
                     <p className="mt-2 text-xs leading-relaxed text-[#626262]">{t.tagline}</p>
                   </div>
-                </Link>
+                  <Link href={`/tutors/${t.id}`} className="ml-auto shrink-0 text-xs text-[#626262] underline">编辑</Link>
+                  <Link href={`/free?tutor=${t.id}`} className="ml-2 shrink-0 text-xs font-semibold underline">提问</Link>
+                </div>
               ))}
             </div>
           </aside>
@@ -178,7 +194,7 @@ export default async function HomePage() {
       </main>
       <footer className="mx-auto flex max-w-7xl flex-wrap justify-between gap-2 border-t-2 border-[#171717] px-4 py-5 text-xs text-[#626262] sm:px-6">
         <span className="font-serif font-semibold text-[#171717]">AniLearn</span>
-        <span>试卷 · 课堂 · 笔记</span>
+        <span>试卷 · 外刊 · 自由提问</span>
       </footer>
     </div>
   );

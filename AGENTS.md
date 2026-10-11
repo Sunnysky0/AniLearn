@@ -193,6 +193,11 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 - After behavior changes: `npm run typecheck` and `npm run lint`. Classroom/UI changes need a real browser pass (chat, board, TTS reveal, paper upload, settings).
 - After completing code updates and the relevant checks, run `codegraph sync` from the project root to update the code index before reporting completion.
 
+## Git workflow
+
+- Work, commit and push directly on the existing `main` branch.
+- Do not create or switch to another branch on your own. Use another branch only when explicitly instructed by the user.
+
 ## Commands
 
 ```bash

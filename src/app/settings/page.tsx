@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, CheckCircle2, Loader2, Play, Save, School, Volume2 } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import ModelSettings from "@/components/ModelSettings";
+import { useSpeechAudioController } from "@/lib/client/speech-audio";
 import { type PublicSettings, type TTSRequest } from "@/lib/types";
 
 const inputCls = "w-full  border border-neutral-200 bg-white px-3.5 py-2.5 text-sm outline-none transition   ";
@@ -34,9 +35,10 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [ttsTest, setTtsTest] = useState<{ loading: boolean; ok?: boolean; text?: string }>({ loading: false });
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
+  const { controllerRef: speechAudioRef, getController: getSpeechAudio } = useSpeechAudioController();
   const ttsRequest = useRef<AbortController | null>(null);
   const ttsAudio = useRef<HTMLAudioElement | null>(null);
-  const ttsUrl = useRef<string | null>(null);
+  const ttsClipKey = useRef<string | null>(null);
 
   function load(d: PublicSettings) {
     setS(d);
@@ -61,10 +63,11 @@ export default function SettingsPage() {
       ttsAudio.current.onerror = null;
       ttsAudio.current.pause();
     }
-    if (ttsUrl.current) URL.revokeObjectURL(ttsUrl.current);
+    if (ttsClipKey.current) getSpeechAudio().release(ttsClipKey.current);
+    speechAudioRef.current?.dispose();
+    speechAudioRef.current = null;
     ttsAudio.current = null;
-    ttsUrl.current = null;
-  }, []);
+  }, [getSpeechAudio, speechAudioRef]);
 
   async function save(extra: Record<string, unknown> = {}) {
     if (!s) return false;
@@ -112,24 +115,17 @@ export default function SettingsPage() {
     }
     if (request.signal.aborted) return;
     try {
-      const r = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: "[優しく穏やかな口調] こんにちは！AniLearnへようこそ。一緒に一問ずつ頑張りましょうね。",
-          fresh: true,
-        } satisfies TTSRequest),
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]),
-      });
-      if (!r.ok) {
-        const j = await r.json().catch(() => null);
-        throw new Error(j?.error || "语音合成失败");
-      }
-      const blob = await r.blob();
+      const clip: TTSRequest & { key: string } = {
+        key: "settings-preview:" + crypto.randomUUID(),
+        text: "[優しく穏やかな口調] こんにちは！AniLearnへようこそ。一緒に一問ずつ頑張りましょうね。",
+        fresh: true,
+      };
+      ttsClipKey.current = clip.key;
+      const result = await getSpeechAudio().acquire(clip, request.signal);
       if (request.signal.aborted) return;
-      const url = URL.createObjectURL(blob);
-      ttsUrl.current = url;
-      const audio = new Audio(url);
+      if (result.status === "error") throw result.error;
+      if (result.status !== "ready") return;
+      const audio = new Audio(result.url);
       ttsAudio.current = audio;
       audio.onended = () => {
         stopTTS();
@@ -147,14 +143,16 @@ export default function SettingsPage() {
   }
 
   function stopTTS() {
+    ttsRequest.current?.abort();
+    ttsRequest.current = null;
     if (ttsAudio.current) {
       ttsAudio.current.onended = null;
       ttsAudio.current.onerror = null;
       ttsAudio.current.pause();
       ttsAudio.current = null;
     }
-    if (ttsUrl.current) URL.revokeObjectURL(ttsUrl.current);
-    ttsUrl.current = null;
+    if (ttsClipKey.current) getSpeechAudio().release(ttsClipKey.current);
+    ttsClipKey.current = null;
     setPlaybackBlocked(false);
   }
 

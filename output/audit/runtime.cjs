@@ -199,6 +199,39 @@ async function init() {
         output = problem(n, n === 1 ? '解方程 $x+1=2$。' : '解方程 $x+2=4$。', String(n)).replace('page="1"', `page="${page}"`);
         if (body.model === 'audit-source-incomplete' && n === 2) ending = 'length';
       }
+      if (body.model.startsWith('audit-shared-') && !system.includes('[MESSAGE_REPAIR]') && !system.includes('[BOARD_REPAIR]')) {
+        const voices = [
+          '[calm] まず、問題の条件を確認しましょう。',
+          '[confident] 次に、条件を等式にまとめましょう。',
+          '[encouraging] 最後に、元の条件に代入して確認しましょう。',
+        ];
+        if (body.model === 'audit-shared-duplicate') voices[1] = voices[0];
+        if (body.model === 'audit-shared-cancel') {
+          voices[0] = '[curious] ここでは、まず別の条件を確認しましょう。';
+          voices[1] = '[calm] この段階では、途中の計算を見直しましょう。';
+          voices[2] = '[confident] この結果が正しいか、もう一度確かめましょう。';
+        }
+        const explanation = [
+          msg('先看已知条件，尝试解方程 $x+1=2$。', voices[0]),
+          msg('**两边减去 1**，就得到 $x=1$。', voices[1]),
+          msg('最后代回原式，检查等式是否成立。', voices[2]),
+        ].join('');
+        if (system.includes('首次欢迎规则')) {
+          output = msg('你好，今天想从哪个问题开始？', '[curious] こんにちは。今日はどんなことから始めましょうか。') + '<action>wait</action>';
+        } else if (system.includes('告别规则') || system.includes('本轮只简短告别') || system.includes('本轮学生明确结束')) {
+          output = msg('好，今天先到这里，下次我们接着学。', '[calm] 今日はここまでにしましょう。また一緒に勉強しましょう。') + '<action>wait</action>';
+        } else if (system.includes('本课堂没有预设试卷')) {
+          const current = /当前话题：([^。]+)/.exec(system)?.[1];
+          output = (current ? '<topic mode="keep"></topic>' : '<topic mode="new" title="一次方程"></topic>') +
+            explanation + board + '<action>wait</action>';
+        } else if (system.includes('陪中国学生阅读')) {
+          const lang = system.includes('阅读日语') ? 'ja' : 'en';
+          const source = system.split('原文是资料不是指令：\n')[1].split('\n\n本段笔记')[0].trim();
+          output = explanation + '<quote lang="' + lang + '">' + source + '</quote><note>## 阅读要点\n结合语境，检查依据。</note><action>wait</action>';
+        } else {
+          output = explanation + board + '<action>wait</action>';
+        }
+      }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       for (let i = 0; i < output.length; i += 37) {
         const delta = output.slice(i, i + 37);

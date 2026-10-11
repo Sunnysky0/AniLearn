@@ -8,15 +8,10 @@ import {
   BookOpen,
   Check,
   Circle,
-  Image as ImageIcon,
-  Lightbulb,
-  Paperclip,
   PenLine,
   Play,
   RotateCcw,
-  Send,
   Settings,
-  Square,
   User,
   Volume2,
   VolumeX,
@@ -25,7 +20,10 @@ import {
 import { Logo } from "@/components/AppHeader";
 import { Markdown } from "@/components/Markdown";
 import Blackboard, { type BoardOverlay } from "@/components/classroom/Blackboard";
-import { downloadText, fileToJpegDataUrl } from "@/lib/client/media";
+import { downloadText } from "@/lib/client/media";
+import { ClassroomComposer } from "@/components/ClassroomComposer";
+import { useChatAttachments } from "@/lib/client/chat-attachments";
+import { useSpeechAudioController } from "@/lib/client/speech-audio";
 import { difficultyStars, formatTime, strategyLabel, tokenizeForReveal } from "@/lib/text";
 import type {
   BoardDTO,
@@ -226,7 +224,11 @@ export default function Classroom(props: Props) {
   const [waitingTTS, setWaitingTTS] = useState(false);
   const [entered, setEntered] = useState(false);
   const [input, setInput] = useState("");
-  const [attachments, setAttachments] = useState<string[]>([]);
+  const {
+    images: attachments, processing: attachmentsProcessing, error: attachmentError,
+    addFiles: addAttachments, removeImage: removeAttachment, clearImages: clearAttachments,
+    clearError: clearAttachmentError,
+  } = useChatAttachments();
   const [error, setError] = useState<string | null>(null);
   const [ttsError, setTtsError] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
@@ -248,9 +250,7 @@ export default function Classroom(props: Props) {
   const flushWaiters = useRef<Array<() => void>>([]);
   const finishRef = useRef<(() => void) | null>(null);
   const playerRef = useRef<HTMLAudioElement | null>(null);
-  const ttsCache = useRef(new Map<number, Promise<string | null>>());
-  const ttsRequests = useRef(new Set<AbortController>());
-  const audioUrls = useRef(new Set<string>());
+  const { controllerRef: speechAudioRef, getController: getSpeechAudio } = useSpeechAudioController();
   const disposedRef = useRef(false);
   const lastActionRef = useRef<TurnAction | null>(null);
   const autoCountRef = useRef(0);
@@ -261,8 +261,14 @@ export default function Classroom(props: Props) {
   const prefs = useRef({ muted: false, autoContinue: props.autoContinueDefault, rate: 1 });
   const listRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const camRef = useRef<HTMLInputElement>(null);
+  const requestFlush = useCallback(() => {
+    flushRef.current = true;
+    const ws = flushWaiters.current;
+    flushWaiters.current = [];
+    ws.forEach((waiter) => waiter());
+    finishRef.current?.();
+    getSpeechAudio().cancelPending();
+  }, [getSpeechAudio]);
 
   useEffect(() => {
     prefs.current = { muted, autoContinue, rate };
@@ -272,29 +278,26 @@ export default function Classroom(props: Props) {
       a.defaultPlaybackRate = rate;
       a.playbackRate = rate;
     }
+    getSpeechAudio().setEnabled(props.ttsAvailable && !muted);
     if (muted) {
-      ttsRequests.current.forEach((request) => request.abort());
-      ttsCache.current.clear();
       finishRef.current?.();
     }
-  }, [muted, autoContinue, rate]);
+  }, [muted, autoContinue, rate, getSpeechAudio, props.ttsAvailable]);
 
   useEffect(() => {
     disposedRef.current = false;
     flushRef.current = false;
-    const requests = ttsRequests.current;
-    const urls = audioUrls.current;
     return () => {
       disposedRef.current = true;
       queueRef.current = [];
       pendingRef.current = [];
       requestFlush();
       abortRef.current?.abort();
-      requests.forEach((request) => request.abort());
       playerRef.current?.pause();
-      urls.forEach((url) => URL.revokeObjectURL(url));
+      speechAudioRef.current?.dispose();
+      speechAudioRef.current = null;
     };
-  }, []);
+  }, [requestFlush, speechAudioRef]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -305,15 +308,6 @@ export default function Classroom(props: Props) {
   const current = problems[safeIdx];
 
   // ------------------------------------------------------------------ audio
-  function requestFlush() {
-    flushRef.current = true;
-    const ws = flushWaiters.current;
-    flushWaiters.current = [];
-    ws.forEach((w) => w());
-    finishRef.current?.();
-    ttsRequests.current.forEach((request) => request.abort());
-  }
-
   function untilFlush(): Promise<null> {
     return new Promise((resolve) => {
       if (flushRef.current) resolve(null);
@@ -321,45 +315,18 @@ export default function Classroom(props: Props) {
     });
   }
 
-  function getAudio(m: MessageDTO): Promise<string | null> {
-    const hit = ttsCache.current.get(m.id);
-    if (hit) return hit;
-    const p = (async () => {
-      const ac = new AbortController();
-      ttsRequests.current.add(ac);
-      try {
-        const r = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: m.speech, voiceId: tutor.voiceId }),
-          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(15_000)]),
-        });
-        if (!r.ok) {
-          const j = await r.json().catch(() => null);
-          throw new Error(j?.error || `语音合成失败 (${r.status})`);
-        }
-        const blob = await r.blob();
-        if (ac.signal.aborted || disposedRef.current) return null;
-        const url = URL.createObjectURL(blob);
-        audioUrls.current.add(url);
-        return url;
-      } catch (e) {
-        if (!ac.signal.aborted && !disposedRef.current)
-          setTtsError(
-            e instanceof Error && e.name === "TimeoutError"
-              ? "语音等待超时，已切换为文字显示。"
-              : e instanceof Error
-                ? e.message
-                : String(e),
-          );
-        ttsCache.current.delete(m.id);
-        return null;
-      } finally {
-        ttsRequests.current.delete(ac);
-      }
-    })();
-    ttsCache.current.set(m.id, p);
-    return p;
+  async function getAudio(m: MessageDTO, retryFailed = false): Promise<string | null> {
+    const key = "paper:" + props.session.id + ":" + m.id;
+    if (retryFailed) getSpeechAudio().retryFailed(key);
+    const result = await getSpeechAudio().acquire({
+      key,
+      text: m.speech,
+      voiceId: tutor.voiceId,
+    });
+    if (result.status === "error" && !disposedRef.current) {
+      setTtsError(result.error.name === "TimeoutError" ? "语音等待超时，已切换为文字显示。" : result.error.message);
+    }
+    return result.status === "ready" ? result.url : null;
   }
 
   function appendMessage(m: MessageDTO) {
@@ -374,6 +341,8 @@ export default function Classroom(props: Props) {
       setWaitingTTS(true);
       url = await Promise.race([getAudio(m), untilFlush()]);
       setWaitingTTS(false);
+    } else if (m.speech) {
+      getSpeechAudio().forget("paper:" + props.session.id + ":" + m.id);
     }
     if (flushRef.current) return appendMessage(m);
     const total = tokenizeForReveal(m.content).length;
@@ -533,6 +502,7 @@ export default function Classroom(props: Props) {
 
   async function startTurn(payload: TurnRequest) {
     if (disposedRef.current) return;
+    getSpeechAudio().cancelPending();
     const text = payload.text ?? "";
     const images = payload.images ?? [];
     payload = { ...payload, intent: payload.intent ?? turnIntentForText(text) };
@@ -603,12 +573,17 @@ export default function Classroom(props: Props) {
           if (ev.type === "error") turn.failed = true;
           if (
             ev.type === "message" &&
+            ev.message.role === "tutor" &&
+            ev.message.kind === "text" &&
             props.ttsAvailable &&
             ev.message.speech &&
-            !flushRef.current &&
-            !prefs.current.muted
+            !flushRef.current
           ) {
-            void getAudio(ev.message); // prefetch voice while earlier messages are still playing
+            getSpeechAudio().prefetch({
+              key: "paper:" + props.session.id + ":" + ev.message.id,
+              text: ev.message.speech,
+              voiceId: tutor.voiceId,
+            }, ac.signal);
           }
           queueRef.current.push({ ...ev, turn });
           void pump();
@@ -631,15 +606,17 @@ export default function Classroom(props: Props) {
     }
   }
 
-  function send(raw: string, images: string[] = []) {
+  function send(raw: string, images: string[] = [], clearDraft = true): boolean {
     const text = raw.trim();
-    if (!text && !images.length) return;
+    if (!text && !images.length) return false;
     if (!props.llmReady) {
       setError("尚未配置 AI 模型 API Key，请先前往「设置」页面配置。");
-      return;
+      return false;
     }
-    setInput("");
-    setAttachments([]);
+    if (clearDraft) {
+      setInput("");
+      clearAttachments();
+    }
     setError(null);
     autoCountRef.current = 0;
     lastActionRef.current = null;
@@ -651,9 +628,10 @@ export default function Classroom(props: Props) {
       if (currentTurnRef.current) currentTurnRef.current.cancelled = true;
       requestFlush();
       abortRef.current?.abort();
-      return;
+      return true;
     }
     void startTurn({ text, images, intent, problemIdx: intent === "complete_problem" ? session.currentIdx : undefined });
+    return true;
   }
 
   function stop() {
@@ -720,7 +698,7 @@ export default function Classroom(props: Props) {
   const replay = useCallback(
     async (m: MessageDTO) => {
       if (pumpingRef.current || !props.ttsAvailable || prefs.current.muted || disposedRef.current) return;
-      const url = await getAudio(m);
+      const url = await getAudio(m, true);
       if (!url || prefs.current.muted || disposedRef.current) return;
       playerRef.current?.pause();
       const a = new Audio(url);
@@ -748,19 +726,6 @@ export default function Classroom(props: Props) {
     const last = visible[visible.length - 1];
     if (props.llmReady && session.status !== "completed" && (!last || last.role !== "tutor")) {
       void startTurn({});
-    }
-  }
-
-  async function onPickImages(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = "";
-    for (const f of files.slice(0, 4)) {
-      try {
-        const d = await fileToJpegDataUrl(f, 1400, 0.82);
-        setAttachments((a) => [...a, d].slice(0, 4));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
     }
   }
 
@@ -1090,103 +1055,28 @@ export default function Classroom(props: Props) {
 
           <div className="border-t border-neutral-200/60 bg-white/70 p-3">
             <button
-              onClick={() => send(GOODBYE_TEXT)}
-              className="mb-2 flex w-full items-center justify-center gap-2 border border-neutral-900 bg-white px-3 py-2 text-sm font-medium text-neutral-900 hover:bg-neutral-100"
+              onClick={() => send(GOODBYE_TEXT, [], false)}
+              className="flex w-full items-center justify-center gap-2 border border-neutral-900 bg-white px-3 py-2 text-sm font-medium text-neutral-900 hover:bg-neutral-100"
             >
               <ArrowLeft className="h-4 w-4" /> {GOODBYE_TEXT}
             </button>
-            <div className="thin-scroll mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
-              {QUICK.map((q) => (
-                <button
-                  key={q}
-                  onClick={() => send(q)}
-                  className="shrink-0 bg-white px-3 py-1 text-xs text-neutral-600 border border-neutral-200 transition hover:bg-neutral-100 hover:text-neutral-800 hover:border-neutral-200"
-                >
-                  {q}
-                </button>
-              ))}
-              {busy !== "idle" && (
-                <button
-                  onClick={stop}
-                  className="ml-auto inline-flex shrink-0 items-center gap-1 bg-neutral-100 px-3 py-1 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
-                >
-                  <Square className="h-3 w-3" /> 停止讲解
-                </button>
-              )}
-            </div>
-            <div className="border border-neutral-200 bg-white p-2 transition">
-              {attachments.length > 0 && (
-                <div className="flex flex-wrap gap-2 px-1 pb-2">
-                  {attachments.map((a, i) => (
-                    <div key={i} className="relative">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={a} alt="" className="h-16 w-16 object-cover border border-neutral-200" />
-                      <button
-                        onClick={() => setAttachments((as) => as.filter((_, j) => j !== i))}
-                        className="absolute -right-1.5 -top-1.5 bg-neutral-700 p-0.5 text-white"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <textarea
-                aria-label="课堂消息"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-                    e.preventDefault();
-                    send(input, attachments);
-                  }
-                }}
-                rows={2}
-                placeholder="输入你的问题，或发送“继续讲解”…"
-                className="w-full resize-none bg-transparent px-2 py-1 text-sm text-neutral-700 outline-none placeholder:text-neutral-500"
-              />
-              <div className="flex items-center gap-1 px-1">
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  className="p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
-                  title="上传解题草稿图片"
-                >
-                  <Paperclip className="h-5 w-5" />
-                </button>
-                <button
-                  onClick={() => camRef.current?.click()}
-                  className="p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
-                  title="拍照上传"
-                >
-                  <ImageIcon className="h-5 w-5" />
-                </button>
-                <button
-                  onClick={() => send("给我一点提示")}
-                  className="p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
-                  title="请求提示"
-                >
-                  <Lightbulb className="h-5 w-5" />
-                </button>
-                <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onPickImages} />
-                <input
-                  ref={camRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  onChange={onPickImages}
-                />
-                <button
-                  onClick={() => send(input, attachments)}
-                  disabled={!input.trim() && !attachments.length}
-                  title="发送消息"
-                  className="ml-auto flex h-10 w-10 items-center justify-center bg-neutral-900 text-white transition hover:brightness-110 disabled:opacity-40"
-                >
-                  <Send className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
           </div>
+          <ClassroomComposer
+            value={input}
+            onValueChange={setInput}
+            images={attachments}
+            onRemoveImage={removeAttachment}
+            onAddImages={addAttachments}
+            imageProcessing={attachmentsProcessing}
+            attachmentError={attachmentError}
+            onClearAttachmentError={clearAttachmentError}
+            canSend={props.llmReady}
+            busy={busy !== "idle"}
+            quickActions={QUICK.map((q) => ({ label: q, onSelect: () => send(q, [], false) }))}
+            onHint={() => send("给我一点提示", [], false)}
+            onSend={(text, images) => send(text, images, true)}
+            onStop={stop}
+          />
         </section>
 
         {/* blackboard */}

@@ -3,11 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Download, ImagePlus, Maximize2, MessageCircle, MoreHorizontal, NotebookPen, Pause, Play, RotateCcw, Send, Settings, Square, Trash2, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, ChevronDown, ChevronLeft, ChevronRight, Download, Maximize2, MessageCircle, MoreHorizontal, NotebookPen, Pause, Play, RotateCcw, Settings, Trash2, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ClassroomComposer } from "@/components/ClassroomComposer";
 import { Markdown } from "@/components/Markdown";
 import { Logo } from "@/components/AppHeader";
-import { fileToJpegDataUrl } from "@/lib/client/media";
+import { useChatAttachments } from "@/lib/client/chat-attachments";
+import { useSpeechAudioController } from "@/lib/client/speech-audio";
 import { revealTutorMessage } from "@/lib/client/tutor-playback";
 import { tokenizeForReveal } from "@/lib/text";
 import type { BoardBlock, FreeMessageDTO, FreeSessionDTO, FreeTopicDTO, FreeTurnAction, FreeTurnEvent, FreeTurnRequest, TutorDTO } from "@/lib/types";
@@ -21,7 +23,6 @@ type PendingTurn = { payload: FreeTurnRequest; optimisticId?: number };
 
 const SUGGESTIONS = ["继续讲解", "给我一点提示", "能举个例子吗？", "请再讲一遍"];
 const toTitle = (text: string) => Array.from(text.replace(/\s+/g, " ").trim()).slice(0, 32).join("") || "图片提问";
-const imageBytes = (dataUrl: string) => Math.floor((dataUrl.split(",", 2)[1]?.length ?? 0) * 3 / 4);
 const imageUrl = (src: string) => src;
 const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader();
@@ -37,7 +38,11 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
   const [topics, setTopics] = useState(props.topics);
   const [messages, setMessages] = useState(props.messages);
   const [input, setInput] = useState("");
-  const [images, setImages] = useState<string[]>([]);
+  const {
+    images, processing: attachmentsProcessing, error: attachmentError,
+    addFiles: addAttachments, removeImage: removeAttachment, clearImages: clearAttachments,
+    clearError: clearAttachmentError,
+  } = useChatAttachments();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [syncRequired, setSyncRequired] = useState(false);
@@ -69,7 +74,7 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
   const returningRef = useRef(false);
   const interruptPlaybackRef = useRef(false);
   const optimisticIdRef = useRef(-1);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const { controllerRef: speechAudioRef, getController: getSpeechAudio } = useSpeechAudioController();
   const chatListRef = useRef<HTMLDivElement>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const preserveScrollRef = useRef<{ top: number; height: number } | null>(null);
@@ -81,6 +86,7 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { autoRef.current = autoContinue; }, [autoContinue]);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
+  useEffect(() => { getSpeechAudio().setEnabled(props.ttsReady && !muted); }, [getSpeechAudio, muted, props.ttsReady]);
 
   useEffect(() => {
     const update = () => setDesktop(window.matchMedia("(min-width: 1024px)").matches);
@@ -99,8 +105,11 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
       pendingRef.current = [];
       requestRef.current?.abort();
       playbackRef.current?.abort();
+      getSpeechAudio().cancelPending();
+      speechAudioRef.current?.dispose();
+      speechAudioRef.current = null;
     };
-  }, []);
+  }, [getSpeechAudio, speechAudioRef]);
 
   useEffect(() => {
     const list = chatListRef.current;
@@ -127,12 +136,13 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
     playbackRef.current = controller;
     await revealTutorMessage({
       text: message.content, speech: message.speech, voiceId: props.tutor.voiceId,
+      audio: getSpeechAudio(), cacheKey: "free:" + message.sessionId + ":" + message.id,
       muted: () => mutedRef.current, rate: () => rateRef.current, signal: controller.signal,
       onReveal: (shown) => { if (!disposedRef.current) setTyping({ id: message.id, shown }); },
     });
     if (playbackRef.current === controller) playbackRef.current = null;
     if (!disposedRef.current) setTyping(null);
-  }, [props.tutor.voiceId]);
+  }, [getSpeechAudio, props.tutor.voiceId]);
 
   const applyEvent = useCallback(async (event: FreeTurnEvent, optimisticId?: number) => {
     if (event.type === "user") {
@@ -178,11 +188,12 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
     returningRef.current = false;
     if (runningRef.current) {
       interruptPlaybackRef.current = true;
+      getSpeechAudio().cancelPending();
       playbackRef.current?.abort();
       requestRef.current?.abort();
     }
     void runQueueRef.current();
-  }, []);
+  }, [getSpeechAudio]);
 
   const runQueue = useCallback(async () => {
     if (runningRef.current || disposedRef.current) return;
@@ -191,6 +202,7 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
     try {
       while (pendingRef.current.length && !disposedRef.current) {
         const next = pendingRef.current.shift()!;
+        getSpeechAudio().cancelPending();
         interruptPlaybackRef.current = false;
         setError("");
         setLastRequest(next);
@@ -240,6 +252,15 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
               if (doneAction) throw new Error("导师回复包含重复结束事件。");
               doneAction = event.action;
             }
+            if (event.type === "message" && event.message.role === "tutor" &&
+              (event.message.kind === "text" || event.message.kind === "feedback") &&
+              event.message.language === "zh-CN" && event.message.speech && props.ttsReady) {
+              getSpeechAudio().prefetch({
+                key: "free:" + event.message.sessionId + ":" + event.message.id,
+                text: event.message.speech,
+                voiceId: props.tutor.voiceId,
+              }, controller.signal);
+            }
             appendToPlaybackQueue(event);
           };
           for (;;) {
@@ -280,7 +301,7 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
       runningRef.current = false;
       if (!disposedRef.current) setBusy(false);
     }
-  }, []);
+  }, [getSpeechAudio, props.ttsReady, props.tutor.voiceId]);
   useEffect(() => { runQueueRef.current = runQueue; }, [runQueue]);
 
   useEffect(() => {
@@ -337,11 +358,9 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
     } finally { setMoreBusy(false); }
   }, [enqueueTurn, session.id]);
 
-  const send = useCallback((text = input, attachmentList = images) => {
+  const send = useCallback((text = input, attachmentList = images, clearDraft = true): boolean => {
     const clean = text.trim();
-    if (!clean && !attachmentList.length) return;
-    if (Array.from(clean).length > 4000) { setError("单条文字最多 4000 字，请分成几条消息发送。"); return; }
-    if (attachmentList.length > 4) { setError("每条消息最多附加 4 张图片。"); return; }
+    if (!clean && !attachmentList.length) return false;
     autoCountRef.current = 0;
     const failedRequest = lastRequest ?? (welcomeNeedsRetry ? { payload: { requestId: props.session.welcomeRequestId, intent: "greeting" as const } } : null);
     if (failedRequest && error && !pendingRef.current.some((item) => item.payload.requestId === failedRequest.payload.requestId)) {
@@ -358,30 +377,13 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
       setSession(next);
     }
     enqueueTurn(payload, optimisticId);
-    setInput(""); setImages([]); setError("");
-  }, [enqueueTurn, error, images, input, lastRequest, makeOptimistic, props.session.welcomeRequestId, welcomeNeedsRetry]);
-
-  const addFiles = useCallback(async (files: FileList | File[]) => {
-    const candidates = Array.from(files).filter((file) => file.type.startsWith("image/"));
-    if (!candidates.length) return;
-    if (images.length + candidates.length > 4) { setError("每条消息最多附加 4 张图片。"); return; }
-    setError("");
-    try {
-      const converted: string[] = [];
-      for (const file of candidates) {
-        let result = "";
-        for (const quality of [0.82, 0.68, 0.54, 0.4]) {
-          result = await fileToJpegDataUrl(file, 2000, quality);
-          if (imageBytes(result) <= 2 * 1024 * 1024) break;
-        }
-        if (imageBytes(result) > 2 * 1024 * 1024) throw new Error("压缩后仍超过 2 MiB，请换一张较小的图片。");
-        converted.push(result);
-      }
-      setImages((current) => [...current, ...converted].slice(0, 4));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "图片读取失败，请重试。");
+    if (clearDraft) {
+      setInput("");
+      clearAttachments();
     }
-  }, [images.length]);
+    setError("");
+    return true;
+  }, [clearAttachments, enqueueTurn, error, images, input, lastRequest, makeOptimistic, props.session.welcomeRequestId, welcomeNeedsRetry]);
 
   const retry = useCallback(() => {
     const request = lastRequest ?? (welcomeNeedsRetry ? { payload: { requestId: props.session.welcomeRequestId, intent: "greeting" as const } } : null);
@@ -418,10 +420,11 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
   const stop = useCallback(() => {
     if (!runningRef.current) return;
     interruptPlaybackRef.current = true;
+    getSpeechAudio().cancelPending();
     playbackRef.current?.abort();
     requestRef.current?.abort();
     setReturnReady(false);
-  }, []);
+  }, [getSpeechAudio]);
 
   const loadOlder = useCallback(async () => {
     const oldest = messages[0]?.id;
@@ -520,24 +523,28 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
   };
 
   const renderComposer = () => (
-    <div className="border-t border-[#c8c8c8] bg-[#fafafa] px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-4">
-      {images.length > 0 && <div className="mb-2 flex gap-2 overflow-x-auto">{images.map((src, index) => <div className="relative shrink-0" key={index}>
-        <Image src={src} width={64} height={64} unoptimized alt={`待发送图片 ${index + 1}`} className="h-16 w-16 border border-[#c8c8c8] object-cover" />
-        <button aria-label="移除图片" onClick={() => setImages((all) => all.filter((_, i) => i !== index))} className="absolute -right-1.5 -top-1.5 bg-[#171717] p-0.5 text-white"><X className="h-3.5 w-3.5" /></button>
-      </div>)}</div>}
-      <div className="flex items-end gap-2 border border-[#171717] bg-white p-2">
-        <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.currentTarget.value = ""; }} />
-        <button title="附加图片" aria-label="附加图片" onClick={() => fileRef.current?.click()} disabled={images.length >= 4} className="mb-1 p-2 text-[#626262] hover:text-black disabled:opacity-30"><ImagePlus className="h-5 w-5" /></button>
-        <textarea value={input} onChange={(event) => setInput(event.target.value)} onPaste={(event) => {
-          const pasted = Array.from(event.clipboardData.items).filter((item) => item.type.startsWith("image/")).map((item) => item.getAsFile()).filter((file): file is File => !!file);
-          if (pasted.length) { event.preventDefault(); void addFiles(pasted); }
-        }} onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); }
-        }} rows={2} maxLength={8000} placeholder="问任何问题；Enter 发送，Shift+Enter 换行" className="max-h-40 min-h-12 flex-1 resize-y border-0 bg-transparent px-1 py-2 text-sm outline-none focus:outline-none" />
-        {busy ? <button title="停止本轮" aria-label="停止本轮" onClick={stop} className="mb-1 bg-[#171717] p-2 text-white"><Square className="h-4 w-4 fill-current" /></button> : <button title="发送" aria-label="发送" onClick={() => send()} disabled={(!input.trim() && !images.length) || Array.from(input).length > 4000} className="ink-button mb-1 !px-3 !py-2 disabled:opacity-40"><Send className="h-4 w-4" /></button>}
-      </div>
-      <div className="mt-1 flex justify-between text-[10px] text-[#777]"><span>最多 4 张图片 · 图片会压缩后发送</span><span>{Array.from(input).length}/4000</span></div>
-    </div>
+    <ClassroomComposer
+      value={input}
+      onValueChange={setInput}
+      images={images}
+      onRemoveImage={removeAttachment}
+      onAddImages={addAttachments}
+      imageProcessing={attachmentsProcessing}
+      attachmentError={attachmentError}
+      onClearAttachmentError={clearAttachmentError}
+      canSend={props.llmReady}
+      busy={busy}
+      placeholder="问任何问题；Enter 发送，Shift+Enter 换行"
+      quickActions={(messages.length ? SUGGESTIONS : []).map((suggestion) => ({
+        label: suggestion,
+        onSelect: () => suggestion === "继续讲解"
+          ? (autoCountRef.current = 0, enqueueTurn({ requestId: crypto.randomUUID(), intent: "continue", topicId: session.currentTopicId }))
+          : send(suggestion, [], false),
+      }))}
+      onHint={() => send("给我一点提示", [], false)}
+      onSend={(text, attachments) => send(text, attachments)}
+      onStop={stop}
+    />
   );
 
   return (
@@ -592,7 +599,6 @@ export default function FreeClassroom(props: PageResponse & { llmReady: boolean;
             {welcomeNeedsRetry && !busy && !error && <div role="alert" className="flex items-center gap-2 border-l-2 border-[#b45309] bg-[#fff7ed] px-3 py-2 text-sm text-[#92400e]"><span className="flex-1">欢迎语尚未完成，已保存的课堂可以继续。</span><button onClick={retry} className="shrink-0 font-semibold underline">重试欢迎语</button></div>}
             {error && <div role="alert" className="flex items-start gap-2 border-l-2 border-[#b91c1c] bg-[#fef2f2] px-3 py-2 text-sm text-[#991b1b]"><span className="flex-1">{error}</span>{syncRequired ? <button onClick={() => void syncClassroom()} disabled={moreBusy} className="shrink-0 font-semibold underline">同步课堂</button> : (lastRequest || welcomeNeedsRetry) ? <button onClick={retry} className="shrink-0 font-semibold underline">重试</button> : null}</div>}
           </div>
-          {messages.length > 0 && <div className="flex gap-2 overflow-x-auto border-t border-[#e5e5e5] px-3 py-2 sm:px-4">{SUGGESTIONS.map((suggestion) => <button key={suggestion} onClick={() => suggestion === "继续讲解" ? (autoCountRef.current = 0, enqueueTurn({ requestId: crypto.randomUUID(), intent: "continue", topicId: session.currentTopicId })) : send(suggestion, [])} className="shrink-0 border border-[#c8c8c8] px-2.5 py-1.5 text-xs hover:border-[#171717] hover:bg-white">{suggestion}</button>)}</div>}
           {returnReady ? <div className="flex items-center justify-between border-t border-[#171717] bg-[#eeeeee] px-4 py-3"><span className="text-sm">本次交流已结束，内容已经保存。</span><Link href="/" className="ink-button !py-2 text-sm">返回首页 <ArrowRight className="h-4 w-4" /></Link></div> : <div>{!busy && <div className="flex justify-end px-3 pt-2 sm:px-4"><button onClick={() => { autoCountRef.current = 0; enqueueTurn({ requestId: crypto.randomUUID(), intent: "goodbye", topicId: session.currentTopicId }); }} disabled={!props.llmReady} className="text-xs text-[#626262] underline underline-offset-2 hover:text-black">结束本次交流</button></div>}{renderComposer()}</div>}
         </section>
 

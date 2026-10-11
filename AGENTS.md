@@ -63,6 +63,9 @@ src/
   lib/types.ts         shared types, PROVIDERS, DTOs, event unions
   lib/text.ts          math normalize, atomic reveal, short-message splitting, language checks
   lib/client/media.ts  JPEG downscale, PDF→image (pdfjs in /public/pdfjs)
+  lib/client/speech-audio.ts  shared TTS prefetch, playback cache, cancellation and URL lifetime
+  lib/client/chat-attachments.ts  shared chat image compression and draft attachment state
+  components/ClassroomComposer.tsx  shared exam-style composer for all three classrooms
   lib/server/
     google-docs.ts    Google Docs public PDF export with redirect and size limits
     llm.ts             OpenAI-compat / Anthropic / Gemini streaming
@@ -86,6 +89,8 @@ API (all `force-dynamic`):
 | `GET /api/readings/:id/analysis-status` | Lightweight completed/total/current-page status, revision and resumability using the reading operation lock; no source payloads or full drafts. |
 | `GET/PATCH /api/readings/:id/pages/:idx` | Read or save one recognized source page; saves require the current material revision. Empty recognized pages are complete. |
 | `POST /api/readings/:id/confirm` | Accept only `{ revision }`; require every expected page and generate full text plus paragraphs in source order, atomically setting `ready`. Legacy articles retain their full-text PATCH endpoint until background re-recognition. |
+| `POST /api/reading-sessions/:id/turn` | Reading lesson turn. Body `{ text?, images?, intent?: "next" \| "goodbye", paragraphIdx }`; images are student-message attachments, not reading sources. Streams `ReadingTurnEvent` NDJSON. |
+| `GET /api/reading-sessions/:id/messages/:messageId/attachments/:idx` | Read one saved reading-classroom message image. |
 | `POST /api/papers/:id/analyze` | Inventory then per-problem vision analysis, streamed as NDJSON `AnalysisEvent`. Body `{ restart?: boolean }`; default resumes saved draft. Continues after browser disconnect. |
 | `PATCH/DELETE /api/papers/:id` | Edit/delete under the paper lock. Subject cannot change after publication or while a draft exists. |
 | `POST /api/sessions` | Start classroom (`paperId` + `tutorId`). Requires complete, error-free `ready` paper; saves snapshot in a transaction. |
@@ -99,6 +104,7 @@ API (all `force-dynamic`):
 Settings keys: DB row `app_settings.id = 1`, else env. Provider env: `OPENAI_API_KEY`; `ANTHROPIC_API_KEY` / `CLAUDE_API_KEY`; `XAI_API_KEY` / `GROK_API_KEY`; `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`. Fish: `FISH_API_KEY` / `FISH_AUDIO_API_KEY`. Default Fish model `s2.1-pro`. Default voice `db1553e441c84b49bf250912563ec8fc`.
 
 DB (Drizzle, `src/db/schema.ts`): `app_settings`, `tutors`, `papers`, `paper_pages` (base64 image or UTF-8 text per source page, identified by MIME), `problems`, `sessions`, `messages`, `boards` (unique on session+problemIdx). Text sources use `text/markdown`, `text/x-tex`, or `application/x-tex`; send their decoded source to the LLM as text, never as an image. Do not compile TeX or resolve external file dependencies. `PaperDTO.pageMimes` is optional for legacy snapshots and enables source-aware previews.
+`reading_messages` also stores chat attachments in an additive JSONB `attachments` column with a default empty array. Use the existing `npm run db:push` flow to synchronize this addition before starting the updated app.
 
 Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullable for legacy sessions), and `sessions.coverage` (default `{}`). Sync schema before running this version in another environment. Do not remove these fields or use a destructive schema reset to resolve migration issues.
 
@@ -146,14 +152,19 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 - Paper and reading uploads accept pasted images and public Google Docs links. The shared import control reads one preferred image representation per clipboard item; Google Docs export imports all tabs as PDF pages and goes through the existing review flow. Text-entry controls keep their normal paste behavior. Imports are staged before submission; paper pages, including pasted paper text, count toward the 12-page paper limit.
 - Google Docs imports require public access and export permission, use no Google login, and time out after 30 seconds. Export requests are restricted to Docs document links, allow at most five redirects to Google export hosts, and cap the PDF at 20 MiB. No document source is stored until the user submits the upload form.
 - Client pump (`Classroom.tsx`): play each `message` (TTS + reveal), then apply `board` / `problem` / `done`. User may interrupt; pending input flushes the queue.
+- All three classroom streams start TTS prefetch when a valid tutor message event arrives. Synthesis may complete out of order; each classroom applies messages, boards, notes, progress and completion in its existing event order.
+- The three classroom composers use `ClassroomComposer` and the shared chat-attachment helper. Chat text is limited to 4,000 Unicode code points; each message accepts up to four JPEG/PNG/WebP/GIF images, each at most 2 MiB after conversion. Paste reads image file items from the active composer and leaves text-only paste native.
+- Reading message attachments are separate from article source pages. Existing `reading_messages` rows get an empty `attachments` array through the additive JSONB column default.
 
 ## Message and voice handling
 
 - `prepareTutorMessages` checks short Chinese text plus Japanese speech. Invalid or long messages get a repair call; Chinese repairs must preserve the original content. If repair fails, retain usable Chinese chunks with empty speech. Unrepaired Japanese chat must fail rather than appear in a Chinese bubble.
 - Short-message splitting targets 80 characters and preserves atomic formulas, bold spans, and links. One indivisible token can exceed the target. The 2-6 bubble count is a prompt target, not a hard runtime limit; preserve content during fallback.
 - Japanese board text/title is translated through a separate repair call and checked again. `/api/tts` also validates speech before contacting Fish.
+- `SpeechAudioController` owns browser TTS requests, in-flight deduplication, cached object URLs, cancellation and cleanup. Every complete valid Chinese tutor message with Japanese speech starts prefetch immediately in all three classrooms; playback awaits the same request result and remains FIFO. Settings and tutor previews use the same requester, while settings previews preserve `fresh: true`.
 - Follow `docs/tts-emotion-tags.md`: S2/S2.1 cues use square brackets and concise free-form descriptions (Japanese descriptions are valid). Every playable tutor speech starts with a primary emotion/style cue; preserve existing cues during repair and add the tutor's base style when absent. Keep cues only in speech, with Japanese spoken text. Do not impose an English-only whitelist or silently convert S2 cues for legacy S1.
 - Muted mode must skip voice prefetch, synthesis, and replay. Use the text reveal timer directly; never wait for inaudible playback.
+- The message request body is limited to 12 MiB. Shared server validation rejects more than 4,000 text code points, more than four images, unsupported image MIME types, invalid base64 or an image exceeding 2 MiB; never silently truncate a classroom message.
 - Current limits: LLM call 180 seconds, full tutor turn 270 seconds, full analysis 750 seconds, Fish request 12 seconds, browser TTS request 15 seconds. Preserve cancellation and text fallback when changing these limits.
 - On interruption, preserve all queued student inputs in order. On unmount, cancel generation/TTS, finish reveal, pause audio, clear pending work, and revoke blob URLs. Optimistic message IDs must be unique.
 - Clean up PDFs through the `getDocument` loading task's `destroy()`. The bundled pdf.js 6.4 API does not expose `destroy()` on the resolved document proxy.

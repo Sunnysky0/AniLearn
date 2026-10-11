@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { readings, readingSources, readingSessions, readingMessages, tutors } from "@/db/schema";
 import { MAX_PAPER_TEXT_BYTES, type ReadingDTO, type ReadingMessage, type ReadingSessionDTO, type ReadingParagraph } from "@/lib/types";
@@ -18,8 +18,18 @@ export function readingSummaryDTO(row: ReadingSummaryRow, pageCount = 0): Readin
 export function readingSessionDTO(row: typeof readingSessions.$inferSelect): ReadingSessionDTO {
   return { id: row.id, readingId: row.readingId, tutorId: row.tutorId, currentIdx: row.currentIdx, status: row.status, progress: row.progress, notes: row.notes, updatedAt: row.updatedAt.toISOString() };
 }
-export function readingMessageDTO(row: typeof readingMessages.$inferSelect): ReadingMessage {
-  return { id: row.id, role: row.role as ReadingMessage["role"], content: row.content, speech: row.speech, paragraphIdx: row.paragraphIdx, kind: row.kind as ReadingMessage["kind"], language: row.language as ReadingMessage["language"] };
+type ReadingMessageRow = typeof readingMessages.$inferSelect;
+type ReadingMessageMetadata = Omit<ReadingMessageRow, "attachments"> & { attachmentCount: number };
+
+export function readingMessageDTO(row: Omit<ReadingMessageRow, "attachments"> & { attachments?: string[]; attachmentCount?: number }): ReadingMessage {
+  const attachmentCount = row.attachmentCount ?? row.attachments?.length ?? 0;
+  return {
+    id: row.id, role: row.role as ReadingMessage["role"], content: row.content, speech: row.speech,
+    paragraphIdx: row.paragraphIdx, kind: row.kind as ReadingMessage["kind"],
+    language: row.language as ReadingMessage["language"], attachmentCount,
+    attachments: Array.from({ length: attachmentCount }, (_, index) =>
+      "/api/reading-sessions/" + row.sessionId + "/messages/" + row.id + "/attachments/" + index),
+  };
 }
 export function paragraphsFromText(text: string, revision: number, sources: string[] = []): ReadingParagraph[] {
   const paragraphs = text.replace(/\r\n?/g, "\n").split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
@@ -82,6 +92,22 @@ export async function getReadingSource(id: number, idx: number) {
 export async function loadReadingSession(id: number) {
   const [session] = await db.select().from(readingSessions).where(eq(readingSessions.id, id)); if (!session) return null;
   const [tutor] = await db.select().from(tutors).where(eq(tutors.id, session.tutorId)); if (!tutor) return null;
-  const messages = await db.select().from(readingMessages).where(eq(readingMessages.sessionId, id)).orderBy(asc(readingMessages.id));
+  const messages = await db.select({
+    id: readingMessages.id, sessionId: readingMessages.sessionId, paragraphIdx: readingMessages.paragraphIdx,
+    role: readingMessages.role, kind: readingMessages.kind, language: readingMessages.language,
+    content: readingMessages.content, speech: readingMessages.speech,
+    attachmentCount: sql<number>`jsonb_array_length(${readingMessages.attachments})::int`,
+  }).from(readingMessages).where(eq(readingMessages.sessionId, id)).orderBy(asc(readingMessages.id));
   return { session, tutor, reading: session.snapshot, messages };
+}
+
+export async function withReadingMessageAttachments(messages: ReadingMessageMetadata[], limit = 2) {
+  const ids = limit > 0 ? messages.filter((message) => message.role === "user" && message.attachmentCount > 0)
+    .slice(-limit).map((message) => message.id) : [];
+  const attachments = ids.length
+    ? await db.select({ id: readingMessages.id, attachments: readingMessages.attachments })
+      .from(readingMessages).where(inArray(readingMessages.id, ids))
+    : [];
+  const byId = new Map(attachments.map((message) => [message.id, message.attachments]));
+  return messages.map((message) => ({ ...message, attachments: byId.get(message.id) ?? [] }));
 }

@@ -50,6 +50,10 @@ export function turnIntentForText(text: string): TurnIntent | undefined {
 }
 export const MAX_PAPER_PAGES = 12;
 export const MAX_PAPER_TEXT_BYTES = 1_500_000;
+export const MAX_CHAT_TEXT_CHARS = 4000;
+export const MAX_CHAT_IMAGES = 4;
+export const MAX_CHAT_IMAGE_BYTES = 2 * 1024 * 1024;
+export const MAX_CHAT_TURN_BODY_BYTES = 12 * 1024 * 1024;
 export const CORE_COVERAGE_TOPICS = ["solution", "knowledge", "skills", "pitfalls"] as const;
 export const COVERAGE_TOPICS = [...CORE_COVERAGE_TOPICS, "extension", "practice"] as const;
 export type CoverageTopic = (typeof COVERAGE_TOPICS)[number];
@@ -354,6 +358,14 @@ export interface ReadingMessage {
   id: number; role: "user" | "tutor"; content: string; speech: string;
   paragraphIdx: number; kind: "text" | "quote" | "example" | "exercise" | "feedback";
   language: "zh-CN" | ReadingLanguage;
+  attachments: string[];
+  attachmentCount: number;
+}
+export interface ReadingTurnRequest {
+  text?: string;
+  images?: string[];
+  intent?: "next" | "goodbye";
+  paragraphIdx: number;
 }
 export interface ReadingSessionDTO {
   id: number; readingId: number; tutorId: number; currentIdx: number;

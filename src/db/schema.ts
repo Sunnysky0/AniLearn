@@ -185,6 +185,7 @@ export const readingMessages = pgTable("reading_messages", {
   role: text("role").notNull(), kind: text("kind").notNull().default("text"),
   language: text("language").notNull().default("zh-CN"),
   content: text("content").notNull(), speech: text("speech").notNull().default(""),
+  attachments: jsonb("attachments").$type<string[]>().notNull().default([]),
 }, (t) => [index("reading_messages_session_idx").on(t.sessionId, t.id)]);
 
 export const boards = pgTable(

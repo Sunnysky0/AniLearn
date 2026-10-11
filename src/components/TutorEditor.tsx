@@ -1,10 +1,11 @@
 "use client";
 
-import { Children, cloneElement, isValidElement, useId, useRef, useState, type ReactElement } from "react";
+import { Children, cloneElement, isValidElement, useEffect, useId, useRef, useState, type ReactElement } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, Loader2, Mic, Play, Save, Search, Square, Trash2, Upload, UserRound } from "lucide-react";
 import { fileToJpegDataUrl } from "@/lib/client/media";
+import { useSpeechAudioController } from "@/lib/client/speech-audio";
 import {
   DEFAULT_TUTOR_AVATAR,
   DEFAULT_VOICE_ID,
@@ -109,7 +110,21 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsRequest = useRef<AbortController | null>(null);
+  const ttsClipKey = useRef<string | null>(null);
+  const previewGeneration = useRef(0);
+  const { controllerRef: speechAudioRef, getController: getSpeechAudio } = useSpeechAudioController();
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => () => {
+    previewGeneration.current++;
+    ttsRequest.current?.abort();
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if (ttsClipKey.current) getSpeechAudio().release(ttsClipKey.current);
+    speechAudioRef.current?.dispose();
+    speechAudioRef.current = null;
+  }, [getSpeechAudio, speechAudioRef]);
 
   const set = <K extends keyof TutorInput>(k: K, v: TutorInput[K]) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -177,37 +192,46 @@ export default function TutorEditor({ initial, ttsReady }: { initial: TutorDTO |
   }
 
   function stopAudio() {
+    previewGeneration.current++;
+    ttsRequest.current?.abort();
+    ttsRequest.current = null;
     audioRef.current?.pause();
     audioRef.current = null;
+    if (ttsClipKey.current) getSpeechAudio().release(ttsClipKey.current);
+    ttsClipKey.current = null;
     setPlaying(null);
   }
 
   async function preview(voiceId: string, key: string, sample?: string | null) {
     if (playing === key) return stopAudio();
     stopAudio();
+    const generation = ++previewGeneration.current;
     setPlaying(key);
+    let request: AbortController | null = null;
     try {
       let src = sample ?? "";
       if (!src) {
         const text = `${form.voiceStyle || ""} こんにちは！${form.name || "先生"}です。今日も一緒に、一問ずつ丁寧に頑張りましょうね。`;
-        const r = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, voiceId }),
-        });
-        if (!r.ok) {
-          const j = await r.json().catch(() => null);
-          throw new Error(j?.error || "语音合成失败");
-        }
-        src = URL.createObjectURL(await r.blob());
+        request = new AbortController();
+        ttsRequest.current = request;
+        const clipKey = "tutor-preview:" + crypto.randomUUID();
+        ttsClipKey.current = clipKey;
+        const result = await getSpeechAudio().acquire({ key: clipKey, text, voiceId }, request.signal);
+        if (request.signal.aborted || generation !== previewGeneration.current) return;
+        if (result.status === "error") throw result.error;
+        if (result.status !== "ready") return;
+        src = result.url;
       }
+      if (generation !== previewGeneration.current) return;
       const a = new Audio(src);
       audioRef.current = a;
-      a.onended = () => setPlaying(null);
+      a.onended = () => { if (generation === previewGeneration.current) stopAudio(); };
       await a.play();
     } catch (e) {
-      setVoiceError(e instanceof Error ? e.message : String(e));
-      setPlaying(null);
+      if (!request?.signal.aborted && generation === previewGeneration.current) {
+        setVoiceError(e instanceof Error ? e.message : String(e));
+        setPlaying(null);
+      }
     }
   }
 

@@ -19,6 +19,7 @@ import { PACES, turnIntentForText, type TeachingCoverage, type TurnIntent, type 
 import type { BoardBlock, ProblemProgress, TurnAction, TurnEvent } from "@/lib/types";
 import { fullPlan, goalsFor, goalCovered, missingGoals } from "@/lib/server/learning-plan";
 import { requestPlan, legacyInventory } from "@/lib/server/session-plan";
+import { readChatInputRequest } from "@/lib/server/chat-input";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -41,11 +42,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 }
 
 async function runTurn(req: Request, sessionId: number, release: () => Promise<void>) {
-  const input = await req.json().catch(() => null);
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    return Response.json({ error: "讲解请求必须为 JSON 对象。" }, { status: 400 });
-  }
-  const body = input as TurnRequest;
+  let parsed;
+  try { parsed = await readChatInputRequest(req); }
+  catch (error) { return Response.json({ error: error instanceof Error ? error.message : "讲解请求格式不正确。" }, { status: 400 }); }
+  const { text, images } = parsed;
+  const body = parsed.body as unknown as TurnRequest;
   if (body.intent !== undefined && body.intent !== "complete_problem" && body.intent !== "goodbye") {
     return Response.json({ error: "无效的课堂意图。" }, { status: 400 });
   }
@@ -65,7 +66,6 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
     return Response.json({ error: (e as Error).message }, { status: 400 });
   }
 
-  const text = (typeof body.text === "string" ? body.text : "").trim().slice(0, 4000);
   const intent: TurnIntent | undefined = body.intent === "goodbye" || body.intent === "complete_problem"
     ? body.intent
     : turnIntentForText(text);
@@ -95,10 +95,6 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
   if (intent === "complete_problem" && body.problemIdx !== undefined && body.problemIdx !== idx) {
     return Response.json({ error: "题目已切换，请确认当前题后再继续。" }, { status: 400 });
   }
-  const images = Array.isArray(body.images)
-    ? body.images.filter((x) => typeof x === "string" && x.startsWith("data:image/")).slice(0, 4)
-    : [];
-
   let userRow: typeof messages.$inferSelect | null = null;
   if (text || images.length) {
     [userRow] = await db

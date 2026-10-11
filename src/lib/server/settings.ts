@@ -11,6 +11,7 @@ import {
 } from "@/lib/types";
 import type { LLMConfig } from "./llm";
 import { fishProxyPreview } from "./fish";
+import { httpProxyPreview } from "./http-proxy";
 
 export const FISH_ENV = ["FISH_API_KEY", "FISH_AUDIO_API_KEY"];
 
@@ -136,10 +137,14 @@ export function toPublicSettings(s: SettingsData): PublicSettings {
   const fish = resolveFishKey(s);
   return {
     connections: s.connections.map((c) => {
-      const { apiKey: _key, ...publicConnection } = c;
+      const { apiKey: _key, proxyUrl: _proxyUrl, ...publicConnection } = c;
       void _key;
+      void _proxyUrl;
       const { key, source } = resolveConnectionKey(c);
-      return { ...publicConnection, hasKey: !!key, keySource: source, keyPreview: mask(key) };
+      return {
+        ...publicConnection, hasKey: !!key, keySource: source, keyPreview: mask(key),
+        hasProxy: !!c.proxyUrl?.trim(), proxyPreview: httpProxyPreview(c.proxyUrl ?? ""),
+      };
     }),
     models: s.models,
     provider: s.provider,
@@ -169,7 +174,10 @@ export function getLLMConfig(s: SettingsData, purpose: "chat" | "analysis"): LLM
   }
   const model = binding.model.trim() ||
     (purpose === "chat" ? meta.defaultChatModel : meta.defaultAnalysisModel);
-  return { provider: id, apiKey: key, baseUrl: connection.baseUrl.trim() || undefined, model };
+  return {
+    provider: id, apiKey: key, baseUrl: connection.baseUrl.trim() || undefined, model,
+    connectionId: connection.id, proxyUrl: connection.proxyUrl?.trim() || undefined,
+  };
 }
 
 export function isTTSReady(s: SettingsData) {

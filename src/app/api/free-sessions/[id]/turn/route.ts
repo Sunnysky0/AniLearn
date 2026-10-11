@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { freeMessages, freeSessions, freeTopics, freeTurns } from "@/db/schema";
 import { getLLMConfig, getSettings } from "@/lib/server/settings";
 import { tryOperationLock } from "@/lib/server/locks";
-import { streamChat } from "@/lib/server/llm";
+import { LLMRequestError, streamChat } from "@/lib/server/llm";
 import { createTagParser, type TagBlock } from "@/lib/server/protocol";
 import { FreeTurnProtocolGuard } from "@/lib/server/free-protocol";
 import { prepareTutorMessages } from "@/lib/server/tutor-output";
@@ -91,7 +91,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const allTurns = await db.select().from(freeTurns).where(inArray(freeTurns.id, contextTurnIds)).orderBy(asc(freeTurns.id));
     const system = buildFreeTutorSystem(bundle.tutor, {
       intent, title: bundle.session.title || initialFreeTitle(body.text ?? "", body.images ?? []),
-      topicTitle: recovering && turn.topicId ? bundle.topics.find((topic) => topic.id === turn.topicId)?.title : currentTopic?.title,
+      topicTitle: recovering ? (turn.topicId ?? turn.requestedTopicId)
+        ? bundle.topics.find((topic) => topic.id === (turn!.topicId ?? turn!.requestedTopicId))?.title
+        : undefined : currentTopic?.title,
       topicCount: bundle.topics.length, recovery: recovering,
     });
     const history = userRow
@@ -105,10 +107,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
 
     const controller = new AbortController();
-    const deadline = setTimeout(() => controller.abort(new Error("讲解超过 270 秒，请重试。")), 270_000);
+    let deadlineExpired = false;
+    const deadline = setTimeout(() => {
+      deadlineExpired = true;
+      controller.abort(new Error("讲解超过 270 秒，请重试。"));
+    }, 270_000);
     const abort = () => controller.abort();
     req.signal.addEventListener("abort", abort, { once: true });
     if (req.signal.aborted) controller.abort();
+    const removeActive = () => { clearTimeout(deadline); req.signal.removeEventListener("abort", abort); };
     handedOff = true;
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
@@ -204,13 +211,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
               const zh = /<zh(?:\s[^>]*)?>([\s\S]*?)<\/zh\s*>/i.exec(block.body)?.[1]?.trim() ?? "";
               const ja = /<ja(?:\s[^>]*)?>([\s\S]*?)<\/ja\s*>/i.exec(block.body)?.[1]?.trim() ?? "";
               if (!zh || /<(?!\/?(?:zh|ja)(?:\s|>))[^>]+>/i.test(block.body)) throw new Error("导师消息内容不完整。");
-              const prepared = await prepareTutorMessages(cfg, zh, ja, controller.signal, bundle.tutor.voiceStyle);
+              const prepared = await prepareTutorMessages(cfg, zh, ja, controller.signal, bundle.tutor.voiceStyle, "free_tutor_message_repair");
               for (const message of prepared) await persistTutorText(message.zh, message.ja);
             } else if (block.tag === "board") {
               if (!topicReady || !turnTopic || !topicId) throw new Error("板书必须先属于一个话题。");
               const mode = block.attrs.mode === "replace" ? "replace" : block.attrs.mode === undefined || block.attrs.mode === "append" ? "append" : "invalid";
               if (mode === "invalid" || Object.keys(block.attrs).some((key) => !["mode", "title"].includes(key))) throw new Error("板书格式无效。");
-              const translation = await prepareFreeBoard(cfg, block.body, block.attrs.title ?? turnTopic.title, controller.signal);
+              const translation = await prepareFreeBoard(cfg, block.body, block.attrs.title ?? turnTopic.title, controller.signal, "free_board_translation");
               const markdown = translation.markdown.trim();
               if (!markdown || markdown.length > 12000) throw new Error("板书内容为空或超过 12,000 字。");
               const updated = await db.transaction(async (tx) => {
@@ -247,9 +254,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         };
         try {
           if (userRow) send({ type: "user", requestId: body.requestId, message: toFreeMessageDTO(userRow) });
-          const removeActive = () => { clearTimeout(deadline); req.signal.removeEventListener("abort", abort); };
           const contextMessages = llmMessages;
-          for await (const delta of streamChat(cfg, { system, messages: contextMessages, maxTokens: 8192, signal: controller.signal })) await handle(parser.push(delta));
+          for await (const delta of streamChat(cfg, { system, messages: contextMessages, maxTokens: 8192, signal: controller.signal, stage: "free_tutor_turn" })) await handle(parser.push(delta));
           await handle(parser.end());
           controller.signal.throwIfAborted();
           protocol.finish(parser.stray());
@@ -264,11 +270,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
           send({ type: "done", requestId: body.requestId, action });
           removeActive();
         } catch (error) {
-          const cancelled = controller.signal.aborted;
+          const cancelled = controller.signal.aborted && !deadlineExpired;
           await db.update(freeTurns).set({ status: cancelled ? "cancelled" : "failed", updatedAt: new Date() }).where(eq(freeTurns.id, turn!.id)).catch(() => undefined);
-          if (!cancelled) send({ type: "error", requestId: body.requestId, error: error instanceof Error ? error.message : "导师回复失败，请重试。" });
-          clearTimeout(deadline);
-          req.signal.removeEventListener("abort", abort);
+          if (!cancelled) {
+            const failure = deadlineExpired
+              ? new LLMRequestError("讲解超过 270 秒，请重试。", "LLM_TURN_TIMEOUT")
+              : error instanceof LLMRequestError
+                ? error
+                : { message: error instanceof Error ? error.message : "导师回复失败，请重试。", code: "FREE_TURN_ERROR" };
+            send({ type: "error", requestId: body.requestId, error: failure.message, code: failure.code });
+          }
+          removeActive();
         } finally {
           await release();
           try { output.close(); } catch { /* The browser closed the classroom. */ }

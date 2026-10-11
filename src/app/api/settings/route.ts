@@ -1,6 +1,7 @@
 import { getSettings, saveSettings, toPublicSettings } from "@/lib/server/settings";
 import { PROVIDERS, type ProviderId, type ProviderConnection, type ModelBinding } from "@/lib/types";
 import { normalizeFishProxy } from "@/lib/server/fish";
+import { normalizeHttpProxy } from "@/lib/server/http-proxy";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,7 @@ export async function PUT(req: Request) {
     providers?: Partial<Record<ProviderId, ProviderPatch>>;
     fish?: { apiKey?: string | null; model?: string; enabled?: boolean; proxyUrl?: string | null };
     autoContinue?: boolean;
-    connections?: (Omit<ProviderConnection, "apiKey"> & { apiKey?: string | null })[];
+    connections?: (Omit<ProviderConnection, "apiKey" | "proxyUrl"> & { apiKey?: string | null; proxyUrl?: string | null })[];
     models?: { chat: ModelBinding; analysis: ModelBinding };
   };
   if (body.fish !== undefined && (!body.fish || typeof body.fish !== "object" || Array.isArray(body.fish)))
@@ -72,8 +73,18 @@ export async function PUT(req: Request) {
       if (c.protocol === "openai-compatible" && !c.baseUrl.trim()) return Response.json({ error: "自定义连接需要填写地址。" }, { status: 400 });
       if (c.envProvider !== undefined && !PROVIDERS.some((p) => p.id === c.envProvider)) return Response.json({ error: "环境变量来源无效。" }, { status: 400 });
       const previous = s.connections.find((old) => old.id === c.id);
+      let proxyUrl = previous?.proxyUrl ?? "";
+      if (Object.hasOwn(c, "proxyUrl")) {
+        if (c.proxyUrl === null) proxyUrl = "";
+        else if (typeof c.proxyUrl === "string") {
+          try { proxyUrl = normalizeHttpProxy(c.proxyUrl); }
+          catch (e) {
+            return Response.json({ error: e instanceof Error ? `模型连接代理：${e.message}` : "模型连接代理地址无效。" }, { status: 400 });
+          }
+        } else return Response.json({ error: "模型连接代理地址必须为字符串或 null。" }, { status: 400 });
+      }
       connections.push({ id: c.id, name: c.name.trim().slice(0, 80), protocol: c.protocol, baseUrl: c.baseUrl.trim(), envProvider: c.envProvider,
-        apiKey: c.apiKey === null ? "" : typeof c.apiKey === "string" && c.apiKey.trim() ? c.apiKey.trim() : previous?.apiKey ?? "" });
+        apiKey: c.apiKey === null ? "" : typeof c.apiKey === "string" && c.apiKey.trim() ? c.apiKey.trim() : previous?.apiKey ?? "", proxyUrl });
     }
     if (new Set(connections.map((c) => c.id)).size !== connections.length) return Response.json({ error: "连接 ID 重复。" }, { status: 400 });
     s.connections = connections;

@@ -8,11 +8,13 @@ export interface ProviderConnection {
   protocol: ConnectionProtocol;
   baseUrl: string;
   apiKey: string;
+  proxyUrl?: string;
   envProvider?: ProviderId;
 }
 export interface ModelBinding { connectionId: string; model: string }
-export type PublicConnection = Omit<ProviderConnection, "apiKey"> & {
+export type PublicConnection = Omit<ProviderConnection, "apiKey" | "proxyUrl"> & {
   hasKey: boolean; keySource: KeySource; keyPreview: string;
+  hasProxy: boolean; proxyPreview: string;
 };
 export const PACES = [
   { id: "thorough", name: "条分缕析", description: "逐题完整讲解" },
@@ -390,7 +392,7 @@ export type FreeTurnEvent =
   | { type: "message"; requestId: string; message: FreeMessageDTO }
   | { type: "board"; requestId: string; topic: FreeTopicDTO; blockId: string; message: FreeMessageDTO }
   | { type: "done"; requestId: string; action: FreeTurnAction }
-  | { type: "error"; requestId: string; error: string };
+  | { type: "error"; requestId: string; error: string; code: string };
 export type ReadingTurnEvent =
   | { type: "message"; message: ReadingMessage }
   | { type: "notes"; paragraphIdx: number; notes: string[] }

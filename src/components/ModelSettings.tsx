@@ -5,7 +5,7 @@ import { Loader2, Plus, PlugZap, Save, Trash2 } from "lucide-react";
 import { PROVIDERS, type PublicSettings, type PublicConnection, type ConnectionProtocol, type ModelBinding } from "@/lib/types";
 
 const input = "w-full border border-neutral-300 bg-white px-3 py-2 text-sm";
-type EditConnection = PublicConnection & { apiKey: string | null };
+type EditConnection = PublicConnection & { apiKey: string | null; proxyUrl?: string | null };
 export default function ModelSettings() {
   const [connections, setConnections] = useState<EditConnection[]>([]);
   const [models, setModels] = useState<{ chat: ModelBinding; analysis: ModelBinding } | null>(null);
@@ -22,6 +22,7 @@ export default function ModelSettings() {
     try {
       const res = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ connections: connections.map((c) => ({ id: c.id, name: c.name, protocol: c.protocol, baseUrl: c.baseUrl,
+          ...(c.proxyUrl !== undefined ? { proxyUrl: c.proxyUrl } : {}),
           envProvider: c.envProvider, ...(c.apiKey === null || c.apiKey ? { apiKey: c.apiKey } : {}) })), models }) });
       const data = await res.json(); if (!res.ok) throw new Error(data.error);
       setConnections((data as PublicSettings).connections.map((c) => ({ ...c, apiKey: "" })));
@@ -37,7 +38,7 @@ export default function ModelSettings() {
   return <section className="space-y-5 border-t-2 border-neutral-900 py-6">
     <div className="flex items-center justify-between"><h2 className="font-bold">服务商连接</h2>
       <button type="button" title="添加连接" aria-label="添加连接" className="p-2" onClick={() => setConnections((all) => [...all, {
-        id: crypto.randomUUID(), name: "新连接", protocol: "openai-compatible", baseUrl: "", apiKey: "", hasKey: false, keySource: "none", keyPreview: "",
+        id: crypto.randomUUID(), name: "新连接", protocol: "openai-compatible", baseUrl: "", apiKey: "", hasKey: false, keySource: "none", keyPreview: "", hasProxy: false, proxyPreview: "",
       }])}><Plus className="h-5 w-5" /></button></div>
     {connections.map((c) => <div key={c.id} className="grid gap-3 border-b border-neutral-200 pb-5 sm:grid-cols-2">
       <label className="text-sm">连接名称<input aria-label="连接名称" className={`${input} mt-1`} value={c.name} onChange={(e) => edit(c.id, { name: e.target.value })} /></label>
@@ -47,6 +48,11 @@ export default function ModelSettings() {
       <label className="text-sm">接口地址<input aria-label="接口地址" className={`${input} mt-1`} value={c.baseUrl} placeholder={PROVIDERS.find((p) => p.id === c.protocol)?.defaultBaseUrl ?? "https://example.com/v1"} onChange={(e) => edit(c.id, { baseUrl: e.target.value })} /></label>
       <label className="text-sm">API Key<div className="mt-1 flex gap-2"><input type="password" autoComplete="off" aria-label={`${c.name} API Key`} className={input} value={c.apiKey ?? ""} placeholder={c.hasKey ? c.keyPreview : "未配置"} onChange={(e) => edit(c.id, { apiKey: e.target.value })} />
         <button title="清除密钥" aria-label="清除密钥" onClick={() => edit(c.id, { apiKey: null })}><Trash2 className="h-4 w-4" /></button></div></label>
+      <label className="text-sm sm:col-span-2">模型代理地址（可选）<div className="mt-1 flex gap-2">
+        <input type="password" autoComplete="off" aria-label={`${c.name}模型代理地址`} className={input} value={c.proxyUrl ?? ""} placeholder={c.hasProxy ? `已配置：${c.proxyPreview}` : "http://127.0.0.1:18081"} onChange={(e) => edit(c.id, { proxyUrl: e.target.value })} />
+        {c.hasProxy && c.proxyUrl !== null && <button type="button" title="清除此连接的模型代理" aria-label={`清除 ${c.name} 模型代理`} onClick={() => edit(c.id, { proxyUrl: null })} className="shrink-0 border border-neutral-300 px-3 text-sm">清除</button>}
+        {c.hasProxy && c.proxyUrl === null && <button type="button" title="保留已配置的模型代理" aria-label={`保留 ${c.name} 模型代理`} onClick={() => edit(c.id, { proxyUrl: undefined })} className="shrink-0 border border-neutral-300 px-3 text-sm">保留</button>}
+      </div><p className="mt-1 text-xs text-neutral-500">只用于此连接的模型请求。地址和代理凭据不会公开；保存其他连接设置时会保留已配置地址。</p></label>
       <div className="flex items-center justify-between sm:col-span-2"><span className="text-xs text-neutral-500">{c.keySource === "env" ? "环境变量" : c.hasKey ? "已配置" : "未配置"}</span>
         <button title="删除连接" aria-label={`删除 ${c.name}`} disabled={models?.chat.connectionId === c.id || models?.analysis.connectionId === c.id} className="p-2 disabled:opacity-30" onClick={() => setConnections((all) => all.filter((old) => old.id !== c.id))}><Trash2 className="h-4 w-4" /></button></div>
     </div>)}

@@ -1,7 +1,30 @@
 async (page) => {
   const results = [];
+  const initialSettings = await (await page.request.get('http://127.0.0.1:3107/api/settings')).json();
+  const proxyConnection = initialSettings.connections[0];
+  const seededProxy = await page.request.put('http://127.0.0.1:3107/api/settings', { data: {
+    connections: initialSettings.connections.map(connection => ({ ...connection,
+      ...(connection.id === proxyConnection.id ? { proxyUrl: 'http://ui-audit-user:ui-audit-password@127.0.0.1:18082' } : {}) })),
+    models: initialSettings.models,
+  } });
+  if (!seededProxy.ok()) throw new Error('Could not seed the settings UI proxy fixture');
   await page.goto('http://127.0.0.1:3107/settings');
   await page.getByRole('heading', { name: '模型用途' }).waitFor();
+  const proxyInput = page.getByLabel(`${proxyConnection.name}模型代理地址`);
+  const proxyState = {
+    passwordInput: await proxyInput.getAttribute('type') === 'password',
+    preview: await proxyInput.getAttribute('placeholder'),
+    fullCredentialsVisible: (await page.locator('body').innerText()).includes('ui-audit-password'),
+  };
+  if (!proxyState.passwordInput || !proxyState.preview?.includes('127.0.0.1:18082') || proxyState.fullCredentialsVisible)
+    throw new Error('The connection proxy was not safely redacted in the settings UI');
+  await page.getByRole('button', { name: `清除 ${proxyConnection.name} 模型代理` }).click();
+  await page.getByRole('button', { name: '保存模型设置', exact: true }).click();
+  await page.getByRole('status').getByText('模型设置已保存').waitFor();
+  const clearedProxy = await (await page.request.get('http://127.0.0.1:3107/api/settings')).json();
+  if (clearedProxy.connections.find(connection => connection.id === proxyConnection.id).hasProxy)
+    throw new Error('The settings UI did not clear the selected connection proxy');
+  results.push({ test: 'connection proxy is masked in settings and can be cleared', outcome: 'pass', ...proxyState });
   const originalProtocol = await page.getByLabel('接口类型', { exact: true }).first().inputValue();
   for (const protocol of ['openai', 'anthropic', 'xai', 'gemini', 'openai-compatible']) await page.getByLabel('接口类型', { exact: true }).first().selectOption(protocol);
   await page.getByLabel('接口类型', { exact: true }).first().selectOption(originalProtocol);

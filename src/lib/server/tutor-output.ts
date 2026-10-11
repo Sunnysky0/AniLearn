@@ -4,7 +4,7 @@ import { complete, type LLMConfig } from "./llm";
 import { createTagParser, innerTag } from "./protocol";
 import { tutorSpeechRules } from "./prompts";
 
-export async function prepareTutorMessages(cfg: LLMConfig, zh: string, ja: string, signal: AbortSignal, voiceStyle = "") {
+export async function prepareTutorMessages(cfg: LLMConfig, zh: string, ja: string, signal: AbortSignal, voiceStyle = "", stage = "message_repair") {
   const chunks = splitShortMessages(zh);
   const translateChat = hasJapaneseText(zh);
   if (!chunks.length) throw new Error("模型没有返回有效消息，请重试。");
@@ -24,7 +24,7 @@ ${translateChat
 ${tutorSpeechRules(voiceStyle)}
 只输出${translateChat ? "" : "与输入数量相同的 "}<msg><zh>对应中文</zh><ja>对应日语语音</ja></msg>，不得输出 action、board 或 covered。`,
     messages: [{ role: "user", content: chunks.map((chunk) => `<zh>${chunk}</zh>`).join("\n") + `\n<original_speech>${ja}</original_speech>` }],
-    maxTokens: 8192, signal,
+    maxTokens: 8192, signal, stage,
   });
   } catch (e) {
     if (signal.aborted || translateChat) throw e;
@@ -87,7 +87,7 @@ extension 须有实际推广与适用边界；practice 须有学生作答后的�
 每项仅在有实质讲解时输出 <covered topic="对应项">材料中的连续原文引文</covered>，引文至少六个非空白字符。
 禁止使用标题、问候、已经讲完的宣告或引用学生内容作为证据。没有证据的项不输出；禁止编造、改写、补讲或输出 action、msg、board。`,
       messages: [{ role: "user", content: sources.map((source, i) => `【已讲内容 ${i + 1}】\n${source}`).join("\n\n") }],
-      maxTokens: 2048, signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+      maxTokens: 2048, signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]), stage: "coverage_repair",
     });
     signal.throwIfAborted();
     const parser = createTagParser(["covered"]);

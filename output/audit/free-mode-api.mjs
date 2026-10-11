@@ -22,13 +22,31 @@ const report = [];
 const tutorResult = await json("/api/tutors");
 const tutors = tutorResult.value;
 assert.ok(Array.isArray(tutors) && tutors.length > 0);
-const connection = { id: "audit-free", name: "Free mode mock", protocol: "openai-compatible", baseUrl: "http://127.0.0.1:4107/v1", apiKey: "audit-dummy-key" };
+const connection = { id: "audit-free", name: "Free mode mock", protocol: "openai-compatible", baseUrl: "http://127.0.0.1:4107/v1", apiKey: "audit-dummy-key", proxyUrl: "http://proxy-audit-user:proxy-audit-password@127.0.0.1:18081" };
 const configured = await json("/api/settings", {
   method: "PUT", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ connections: [connection], models: { chat: { connectionId: connection.id, model: "audit-free" }, analysis: { connectionId: connection.id, model: "audit-free" } }, autoContinue: false }),
 });
 assert.equal(configured.response.status, 200);
 report.push("chat-only configuration creates free sessions without Fish Audio credentials");
+const publicConnection = configured.value.connections.find((item) => item.id === connection.id);
+assert.equal(publicConnection.hasProxy, true);
+assert.equal(publicConnection.proxyPreview, "http://***@127.0.0.1:18081");
+assert.equal("proxyUrl" in publicConnection, false);
+assert.doesNotMatch(JSON.stringify(configured.value), /proxy-audit-user|proxy-audit-password/);
+let proxySettings = (await json("/api/settings")).value;
+let preservedProxy = await json("/api/settings", {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ connections: proxySettings.connections.map((item) => ({ ...item, apiKey: item.id === connection.id ? "audit-dummy-key" : null })), models: proxySettings.models }),
+});
+assert.equal(preservedProxy.value.connections.find((item) => item.id === connection.id).hasProxy, true);
+proxySettings = (await json("/api/settings")).value;
+const clearedProxy = await json("/api/settings", {
+  method: "PUT", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ connections: proxySettings.connections.map((item) => ({ ...item, apiKey: item.id === connection.id ? "audit-dummy-key" : null, ...(item.id === connection.id ? { proxyUrl: null } : {}) })), models: proxySettings.models }),
+});
+assert.equal(clearedProxy.value.connections.find((item) => item.id === connection.id).hasProxy, false);
+report.push("connection proxy credentials are redacted, omitted updates preserve them, and null clears them");
 const setChatModel = async (model) => {
   const current = (await json("/api/settings")).value;
   const result = await json("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connections: current.connections.map((item) => ({ ...item, apiKey: item.id === connection.id ? "audit-dummy-key" : null })), models: { ...current.models, chat: { ...current.models.chat, model } } }) });
@@ -135,6 +153,8 @@ await setChatModel("audit-free-fail");
 const recoveryRequestId = "free-turn-" + crypto.randomUUID();
 const interrupted = await events(await postStream("/api/free-sessions/" + recoverySessionId + "/turn", { requestId: recoveryRequestId, text: "说明这个概念", topicId: requestedTopicId }));
 assert.equal(interrupted.at(-1).type, "error");
+assert.equal(interrupted.at(-1).code, "LLM_UPSTREAM_ERROR");
+assert.match(interrupted.at(-1).error, /模型服务/);
 recovery = (await json("/api/free-sessions/" + recoverySessionId)).value;
 assert.equal(recovery.topics.length, 2);
 const pinnedTopicId = recovery.session.currentTopicId;
@@ -181,5 +201,33 @@ assert.equal(preTopicState.messages.filter((message) => message.role === "user" 
 assert.ok(preTopicState.messages.some((message) => message.role === "user" && message.content === "请解释这个定理" && message.topicId === firstSavedTopic));
 report.push("retry before topic selection stays bound to its original topic and survives a topic switch");
 await json("/api/free-sessions/" + preTopicSessionId, { method: "DELETE" });
+
+const emptyTopicSession = await post("/api/free-sessions", { tutorId: tutors[0].id, requestId: "free-create-" + crypto.randomUUID() });
+const emptyTopicSessionId = emptyTopicSession.value.id;
+const emptyTopicWelcome = (await json("/api/free-sessions/" + emptyTopicSessionId)).value.session.welcomeRequestId;
+await events(await postStream("/api/free-sessions/" + emptyTopicSessionId + "/turn", { requestId: emptyTopicWelcome, intent: "greeting" }));
+await setChatModel("audit-free-pretopic-fail");
+const emptyTopicRequestId = "free-turn-" + crypto.randomUUID();
+const failedWithoutTopic = await events(await postStream("/api/free-sessions/" + emptyTopicSessionId + "/turn", {
+  requestId: emptyTopicRequestId, text: "请解释勾股定理", topicId: null,
+}));
+assert.equal(failedWithoutTopic.at(-1).type, "error");
+let emptyTopicState = (await json("/api/free-sessions/" + emptyTopicSessionId)).value;
+assert.equal(emptyTopicState.topics.length, 0);
+assert.equal(emptyTopicState.messages.filter((message) => message.role === "user" && message.content === "请解释勾股定理").length, 1);
+const failedEmptyTopicTurn = emptyTopicState.moreTurns.find((turn) => turn.requestId === emptyTopicRequestId);
+assert.equal(emptyTopicState.messages.filter((message) => message.turnId === failedEmptyTopicTurn.id && message.role === "tutor").length, 0);
+await setChatModel("audit-free");
+const resumedWithoutTopic = await events(await postStream("/api/free-sessions/" + emptyTopicSessionId + "/turn", {
+  requestId: emptyTopicRequestId, text: "请解释勾股定理", topicId: null,
+}));
+assert.equal(resumedWithoutTopic.at(-1).type, "done");
+assert.equal(resumedWithoutTopic.filter((event) => event.type === "topic").length, 1);
+emptyTopicState = (await json("/api/free-sessions/" + emptyTopicSessionId)).value;
+assert.equal(emptyTopicState.topics.length, 1);
+assert.equal(emptyTopicState.messages.filter((message) => message.role === "user" && message.content === "请解释勾股定理").length, 1);
+assert.equal(emptyTopicState.messages.filter((message) => message.role === "user" && message.content === "请解释勾股定理")[0].topicId, emptyTopicState.topics[0].id);
+report.push("a first turn that fails before topic creation retries once with the same request and creates one topic");
+await json("/api/free-sessions/" + emptyTopicSessionId, { method: "DELETE" });
 
 console.log(JSON.stringify({ result: "pass", checks: report }, null, 2));

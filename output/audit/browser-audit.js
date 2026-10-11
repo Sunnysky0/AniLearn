@@ -65,8 +65,8 @@ async (page) => {
   const nextSession = await api('/api/sessions', 'POST', { paperId: 1, tutorId: 1 });
   await page.goto('http://127.0.0.1:3107/classroom/' + nextSession.id);
   await page.getByRole('button', { name: '开始上课', exact: true }).click();
-  await page.waitForFunction(() => document.body.innerText.includes('本课学习计划已完成'), null, { timeout: 30000 });
-  results.push({ test: 'next starts next problem automatically', outcome: 'pass', sessionId: nextSession.id });
+  await page.getByRole('region', { name: '对话' }).getByText('第 2 题 · 方程式', { exact: true }).waitFor({ timeout: 30000 });
+  results.push({ test: 'next action advances the classroom to the next problem', outcome: 'pass', sessionId: nextSession.id });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'output/playwright/fix-mobile.png', fullPage: true });
   results.push(await page.evaluate(() => ({ test: 'mobile layout', outcome: document.documentElement.scrollWidth <= innerWidth ? 'pass' : 'fail', viewportWidth: innerWidth, documentWidth: document.documentElement.scrollWidth })));

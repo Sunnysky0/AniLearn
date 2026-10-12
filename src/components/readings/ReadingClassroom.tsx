@@ -11,7 +11,7 @@ import { useChatAttachments } from "@/lib/client/chat-attachments";
 import { useSpeechAudioController } from "@/lib/client/speech-audio";
 import { tokenizeForReveal } from "@/lib/text";
 import type { ReadingSessionDTO } from "@/lib/types";
-import type { ReadingDTO, ReadingFocus, ReadingLearningState, ReadingMessage, ReadingPersonalNote, ReadingPhase, ReadingSelection, ReadingTurnEvent, ReadingTurnRequest, TutorDTO } from "@/lib/types";
+import { MAX_CHAT_TEXT_CHARS, type ReadingDTO, type ReadingFocus, type ReadingLearningState, type ReadingMessage, type ReadingPersonalNote, type ReadingPhase, type ReadingSelection, type ReadingSelectionTask, type ReadingTurnEvent, type ReadingTurnRequest, type TutorDTO } from "@/lib/types";
 
 type TurnRequest = Omit<ReadingTurnRequest, "requestId" | "phase" | "stateRevision" | "paragraphIdx"> & {
   requestId: string; phase: ReadingPhase; stateRevision: number; paragraphIdx: number; text: string;
@@ -498,12 +498,13 @@ export default function ReadingClassroom(props: {
     setSelectionBar({ selection, quote, x: Math.max(12, Math.min(window.innerWidth - 370, rect?.left ?? 12)), y: Math.max(60, (rect?.top ?? 80) - 58) });
   }
 
-  function askAboutSelection(question: string) {
+  function askAboutSelection(task: ReadingSelectionTask, question: string) {
     if (!selectionBar) return;
     const anchor = selectionBar.selection;
-    const firstIdx = reading.paragraphs.findIndex((paragraph) => paragraph.id === anchor.segments[0].paragraphId);
     setSelectionBar(null); setMobile("chat");
-    enqueue({ text: question, selection: anchor, paragraphIdx: Math.max(0, firstIdx) });
+    const text = `${question}\n原文选区：“${selectedText(anchor)}”`;
+    enqueue({ text: Array.from(text).length <= MAX_CHAT_TEXT_CHARS ? text : question, selection: anchor,
+      selectionTask: task, paragraphIdx: viewIdx, focus: sessionRef.current.learning.currentFocus });
     window.getSelection()?.removeAllRanges();
   }
 
@@ -666,7 +667,7 @@ export default function ReadingClassroom(props: {
 
     {selectionBar && <div className="fixed z-[70] flex max-w-[calc(100vw-24px)] flex-wrap gap-1 border border-neutral-300 bg-neutral-900 p-2 text-white shadow-xl" style={{ left: selectionBar.x, top: selectionBar.y }}>
       <span className="max-w-48 truncate px-2 py-2 text-xs text-neutral-300">{selectionBar.quote}</span>
-      {[{ label: "解释词语", prompt: "请解释我选中的词语在此处的含义和语境。" }, { label: "分析语法", prompt: "请分析我选中句子的语法结构和关键用法。" }, { label: "说明句意", prompt: "请用简洁中文说明我选中内容的句意。" }].map((item) => <button key={item.label} className="px-2 py-2 text-xs hover:bg-neutral-700" onClick={() => askAboutSelection(item.prompt)}>{item.label}</button>)}
+      {([{ task: "vocabulary", label: "解释词语", prompt: "请解释我选中的词语在此处的含义和语境。" }, { task: "grammar", label: "分析语法", prompt: "请分析我选中句子的语法结构和关键用法。" }, { task: "meaning", label: "说明句意", prompt: "请用简洁中文说明我选中内容的句意。" }] as const).map((item) => <button key={item.label} className="px-2 py-2 text-xs hover:bg-neutral-700" onClick={() => askAboutSelection(item.task, item.prompt)}>{item.label}</button>)}
       <button className="px-2 py-2 text-xs hover:bg-neutral-700" onClick={attachSelectionToComposer}>自由提问</button><button className="px-2 py-2 text-xs hover:bg-neutral-700" onClick={startAnnotationFromSelection}><Highlighter className="mr-1 inline h-3.5 w-3.5" />添加批注</button>
       <button aria-label="关闭选区工具栏" className="px-2 py-2 text-xs hover:bg-neutral-700" onClick={() => setSelectionBar(null)}><X className="h-4 w-4" /></button>
     </div>}

@@ -366,6 +366,7 @@ export interface ReadingMessage {
 }
 export type ReadingPhase = "free_reading" | "article_analysis";
 export type ReadingFocus = "structure" | "writing" | "theme" | "emotion" | "technique";
+export type ReadingSelectionTask = "vocabulary" | "grammar" | "meaning";
 export type ReadingFocusStatus = "not_started" | "in_progress" | "confirmed";
 export interface ReadingSelectionSegment {
   paragraphId: string;
@@ -415,6 +416,7 @@ export interface ReadingTurnRequest {
   stateRevision: number;
   focus?: ReadingFocus | null;
   selection?: ReadingSelection | null;
+  selectionTask?: ReadingSelectionTask;
   text?: string;
   images?: string[];
   intent?: "continue" | "goodbye" | "analysis_summary";

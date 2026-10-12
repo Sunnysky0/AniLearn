@@ -115,7 +115,7 @@ async function init() {
         }
         if (body.model === 'audit-free-fail') ending = 'error';
       } else if (system.includes('[MESSAGE_REPAIR]')) {
-        if (body.model === 'audit-repair-fail') return json(res, { error: { message: 'Simulated repair failure' } }, 503);
+        if (body.model === 'audit-repair-fail' || body.model === 'audit-selection-repair-error') return json(res, { error: { message: 'Simulated repair failure' } }, 503);
         const chunks = [...inputText.matchAll(/<zh>([\s\S]*?)<\/zh>/g)].map(m => m[1]);
         output = chunks.map(chunk => msg(body.model === 'audit-language' ? '这是修复后的中文消息。' : chunk)).join('');
       } else if (system.includes('[COVERAGE_REPAIR]')) {
@@ -160,7 +160,29 @@ async function init() {
       } else if (system.includes('整合英语/日语文章局部结构摘要')) {
         output = '<merged-summary>按原段落顺序整合论点、转折和结论。</merged-summary>';
       } else if (system.includes('陪中国学生阅读')) {
-        if (system.includes('所有分析角度均已经由学生确认')) {
+        if (system.includes('本轮是学生主动发起的划词快捷任务')) {
+          if (body.model === 'audit-selection-provider-error') return json(res, { error: { message: 'Simulated selection provider failure' } }, 503);
+          if (body.model === 'audit-selection-timeout') await new Promise(() => {});
+          const targets = [...system.matchAll(/<quote lang="(en|ja)" paragraph="([^"]+)">([\s\S]*?)<\/quote>/g)]
+            .filter(match => match[2] !== '对应目标的稳定段落 ID');
+          const quotes = targets.map(match => match[0]).join('');
+          const speech = body.model === 'audit-selection-repair-error' ? 'English speech only.' : '[穏やか] ここでは、火をつけるための装置を表しています。';
+          const explanation = system.includes('快捷任务（grammar）') ? '选中部分说明装置的用途，形容词作定语修饰后面的名词。'
+            : system.includes('快捷任务（meaning）') ? '这部分说的是在货运包裹中藏入用于纵火的装置。'
+            : '这是形容词，此处表示用于引燃或纵火的，修饰后面的装置。';
+          output = quotes + msg(explanation, speech) + msg('结合原句，应理解为燃烧装置，而不是煽动性的言论。', speech) + '<action>wait</action>';
+          if (body.model === 'audit-selection-japanese-retry' && !system.includes('上一份候选回复')) {
+            output = quotes + msg('「明らか」这里表示清楚明白。', speech) + '<action>wait</action>';
+          }
+          if (body.model === 'audit-selection-wrong' || (body.model === 'audit-selection-retry' && !system.includes('上一份候选回复'))) {
+            output = `<quote lang="${targets[0][1]}" paragraph="${targets[0][2]}">campaign develop: undersea cables cut, incendiary devices hidden in cargo packages, and a</quote>` +
+              msg('这里的 campaign 是军事语境下的系列行动。') + msg('develop 在这里表示逐步展开。') + '<action>wait</action>';
+          }
+          if (body.model === 'audit-selection-malformed') output = quotes + '<msg><zh>不完整的解释</zh><ja>[calm] 説明します。</ja><action>wait</action>';
+          if (body.model === 'audit-selection-wrong-paragraph') output = output.replace(/paragraph="[^"]+"/, 'paragraph="missing"');
+          if (body.model === 'audit-selection-analysis-note') output = output.replace('<action>', '<analysis-note focus="structure">不应保存的笔记</analysis-note><action>');
+          if (body.model === 'audit-selection-provider-truncated') ending = 'length';
+        } else if (system.includes('所有分析角度均已经由学生确认')) {
           output = msg('整篇文章先提出中心问题，再通过分层论据展开，最后回扣主旨。', '[calm] 文章は中心となる問いを示し、論拠を展開した後、主題へ戻っています。') + '<analysis-summary>文章先提出问题，再依次提供论据，最后回到中心主旨。</analysis-summary><action>wait</action>';
         } else if (system.includes('现在处于文章分析阶段')) {
           const focus = /<analysis-note focus="([^"]+)"/.exec(system)?.[1] || 'structure';
@@ -253,7 +275,7 @@ async function init() {
       for (let i = 0; i < output.length; i += 37) {
         const delta = output.slice(i, i + 37);
         res.write('data: ' + JSON.stringify(gemini ? { candidates: [{ content: { parts: [{ text: delta }] } }] } : { choices: [{ delta: { content: delta } }] }) + '\n\n');
-        await new Promise(resolve => setTimeout(resolve, body.model === 'audit-slow' ? 100 : 3));
+        await new Promise(resolve => setTimeout(resolve, body.model === 'audit-slow' || body.model === 'audit-selection-slow' ? 100 : 3));
       }
       if (ending === 'error') res.write('data: ' + JSON.stringify({ error: { message: 'Audit simulated upstream interruption' } }) + '\n\n');
       else res.write('data: ' + JSON.stringify(gemini ? { candidates: [{ finishReason: ending === 'length' ? 'MAX_TOKENS' : 'STOP' }] } : { choices: [{ delta: {}, finish_reason: ending }] }) + '\n\n');

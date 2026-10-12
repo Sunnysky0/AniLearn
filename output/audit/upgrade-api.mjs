@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
+import { runReadingSelectionAudit } from './reading-selection-api.mjs';
 const base = 'http://127.0.0.1:3107';
 const report = [];
 async function api(path, method = 'GET', body) {
   const response = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   const raw = await response.text(); let value;
-  try { value = JSON.parse(raw); } catch { value = raw.trim().split('\n').filter(Boolean).map(JSON.parse); }
+  if (response.headers.get('content-type')?.includes('application/x-ndjson')) value = raw.trim().split('\n').filter(Boolean).map(JSON.parse);
+  else { try { value = JSON.parse(raw); } catch { value = raw.trim().split('\n').filter(Boolean).map(JSON.parse); } }
   return { status: response.status, value };
 }
 async function sql(query, params = []) {
@@ -389,5 +391,6 @@ await waitReadingStatus(actualRestartReading.id, 'review');
 assert.equal(ok(await api(`/api/readings/${actualRestartReading.id}/pages/0`)).text, 'Preserve this saved first page.');
 pass('an actual app-process restart releases the operation lock and manual resume reuses the previously saved source page');
 
+await runReadingSelectionAudit({ api, sql, configure, tutor, report });
 fs.writeFileSync('output/audit/upgrade-api-results.json', JSON.stringify({ report, paperId, sessionId, readingIds }, null, 2));
 console.log(JSON.stringify(report, null, 2));

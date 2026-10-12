@@ -5,8 +5,11 @@ import type {
   ReadingLearningState,
   ReadingSelection,
   ReadingSelectionSegment,
+  ReadingSelectionTask,
 } from "@/lib/types";
 import { visibleMarkdownText } from "@/lib/reading-selection";
+import { hasJapaneseText } from "@/lib/text";
+import type { TagBlock } from "@/lib/server/protocol";
 
 export { visibleMarkdownText } from "@/lib/reading-selection";
 
@@ -26,6 +29,66 @@ export function firstUnconfirmedFocus(state: ReadingLearningState): ReadingFocus
 
 export function isReadingFocus(value: unknown): value is ReadingFocus {
   return typeof value === "string" && READING_FOCI.includes(value as ReadingFocus);
+}
+
+export function isReadingSelectionTask(value: unknown): value is ReadingSelectionTask {
+  return value === "vocabulary" || value === "grammar" || value === "meaning";
+}
+
+const LEGACY_SELECTION_TASKS: Record<string, ReadingSelectionTask> = {
+  "请解释我选中的词语在此处的含义和语境。": "vocabulary",
+  "请分析我选中句子的语法结构和关键用法。": "grammar",
+  "请用简洁中文说明我选中内容的句意。": "meaning",
+};
+
+export function inferReadingSelectionTask(text: string): ReadingSelectionTask | null {
+  const task = LEGACY_SELECTION_TASKS[text];
+  return isReadingSelectionTask(task) ? task : null;
+}
+
+export class SelectionResponseError extends Error {
+  constructor(readonly issue: "format" | "target" | "explanation" = "format") {
+    super("导师回复没有准确引用当前选区，请重试。");
+    this.name = "SelectionResponseError";
+  }
+}
+
+function selectionMessageParts(body: string): { zh: string; ja: string } | null {
+  const match = /^\s*<zh(?:\s[^>]*)?>([\s\S]*?)<\/zh\s*>\s*<ja(?:\s[^>]*)?>([\s\S]*?)<\/ja\s*>\s*$/i.exec(body);
+  if (!match) return null;
+  return { zh: match[1].trim(), ja: match[2].trim() };
+}
+
+/** Validate only the target and output shape; this does not judge explanatory correctness. */
+export function validateReadingSelectionAnswer(
+  blocks: readonly TagBlock[],
+  stray: string,
+  selection: ReadingSelection,
+  reading: ReadingDTO,
+): void {
+  const fail = (issue: SelectionResponseError["issue"] = "format"): never => { throw new SelectionResponseError(issue); };
+  const segments = selection.segments;
+  if (!segments.length || stray.trim() || blocks.length < segments.length + 2) fail();
+
+  for (const [index, segment] of segments.entries()) {
+    const block = blocks[index];
+    if (!block.closed || block.tag !== "quote" || block.attrs.lang !== reading.language ||
+      block.attrs.paragraph !== segment.paragraphId || block.body.trim() !== segment.quote) fail("target");
+
+    const paragraph = reading.paragraphs.find((candidate) => candidate.id === segment.paragraphId);
+    if (!paragraph) return fail("target");
+    const visible = visibleMarkdownText(paragraph.text);
+    if (visible.slice(segment.start, segment.end) !== segment.quote) fail("target");
+  }
+
+  const action = blocks[blocks.length - 1];
+  if (!action.closed || action.tag !== "action" || action.body.trim() !== "wait") fail();
+  const messages = blocks.slice(segments.length, -1);
+  if (!messages.length || messages.some((block) => block.tag !== "msg" || !block.closed)) fail();
+  for (const block of messages) {
+    const parts = selectionMessageParts(block.body);
+    if (!parts?.zh || hasJapaneseText(parts.zh) || !/\p{Script=Han}/u.test(parts.zh)) fail("explanation");
+  }
 }
 
 function findQuotedRange(source: string, segment: ReadingSelectionSegment): { start: number; end: number } | null {
@@ -88,12 +151,12 @@ export function readingSelectionPrompt(reading: ReadingDTO, selection: ReadingSe
   return selection.segments.map((segment) => {
     const index = reading.paragraphs.findIndex((paragraph) => paragraph.id === segment.paragraphId);
     const paragraph = reading.paragraphs[index];
-    return `第 ${index + 1} 段（来源页 ${paragraph.page}）：\n${segment.prefix}【${segment.quote}】${segment.suffix}`;
+    return `段落 ID ${segment.paragraphId}（第 ${index + 1} 段，来源页 ${paragraph.page}）：\n${segment.prefix}【${segment.quote}】${segment.suffix}`;
   }).join("\n\n");
 }
 
 export function readingTurnHash(input: {
-  text: string; images: string[]; phase: string; focus: string | null; intent: string | null; selection: ReadingSelection | null; paragraphIdx: number; stateRevision: number;
+  text: string; images: string[]; phase: string; focus: string | null; intent: string | null; selection: ReadingSelection | null; paragraphIdx: number; stateRevision: number; selectionTask?: ReadingSelectionTask;
 }) {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }

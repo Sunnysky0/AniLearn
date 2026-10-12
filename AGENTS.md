@@ -170,7 +170,7 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 - Japanese board text/title is translated through a separate repair call and checked again. `/api/tts` also validates speech before contacting Fish.
 - `SpeechAudioController` owns browser TTS requests, in-flight deduplication, cached object URLs, cancellation and cleanup. Every complete valid Chinese tutor message with Japanese speech starts prefetch immediately in all three classrooms; playback awaits the same request result and remains FIFO. Settings and tutor previews use the same requester, while settings previews preserve `fresh: true`.
 - Follow `docs/tts-emotion-tags.md`: S2/S2.1 cues use square brackets and concise free-form descriptions (Japanese descriptions are valid). Every playable tutor speech starts with a primary emotion/style cue; preserve existing cues during repair and add the tutor's base style when absent. Keep cues only in speech, with Japanese spoken text. Do not impose an English-only whitelist or silently convert S2 cues for legacy S1.
-- UI acceptance for reading-classroom changes uses the `$playwright` skill's `playwright-cli` wrapper and saves artifacts under `output/playwright/`. Do not use `@playwright/test` unless the user asks for test files.
+- Repeatable UI acceptance uses the `$playwright` skill's `playwright-cli` wrapper and saves artifacts under `output/playwright/`. Use `@Browser` for exploratory debugging when it helps; choose one tool for acceptance of a given scenario. See the verification workflow below. Do not introduce `@playwright/test` unless the user asks for test files or a test-runner/CI migration.
 - Muted mode must skip voice prefetch, synthesis, and replay. Use the text reveal timer directly; never wait for inaudible playback.
 - The message request body is limited to 12 MiB. Shared server validation rejects more than 4,000 text code points, more than four images, unsupported image MIME types, invalid base64 or an image exceeding 2 MiB; never silently truncate a classroom message.
 - Current limits: LLM call 180 seconds, full tutor turn 270 seconds, full analysis 750 seconds, Fish request 12 seconds, browser TTS request 15 seconds. Preserve cancellation and text fallback when changing these limits.
@@ -198,13 +198,69 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 - `"use client"` only for interactive trees (`Classroom`, `Blackboard`, `Markdown`, editors). Pages that can be server components should stay server components (`dynamic = "force-dynamic"` when they read the DB).
 - Tailwind utility classes + the chalk/markdown rules already in `globals.css`. Match existing classroom chrome; do not introduce a second design system.
 - Prefer small, explicit functions over new frameworks. Match the surrounding file's style.
-- After behavior changes: `npm run typecheck` and `npm run lint`. Classroom/UI changes need a real browser pass (chat, board, TTS reveal, paper upload, settings).
+- After behavior changes: `npm run typecheck`, `npm run lint`, and the affected checks selected by the verification workflow below. Classroom/UI changes need a real browser pass for the affected flow; upload, settings, other classrooms and voice edge cases are selected by impact rather than repeated for every UI edit.
 - After completing code updates and the relevant checks, run `codegraph sync` from the project root to update the code index before reporting completion.
 
 ## Git workflow
 
 - Work, commit and push directly on the existing `main` branch.
 - Do not create or switch to another branch on your own. Use another branch only when explicitly instructed by the user.
+
+## Verification workflow
+
+### Select checks by impact
+
+- Before testing, identify the changed behavior, shared consumers and relevant failure paths. Use the matrix below and the "When changing X, also touch Y" table. State the selected checks briefly; expand coverage when dependencies, failures or uncertainty justify it.
+- Documentation-only changes require `git diff --check` and verification of changed links, file paths and documented commands. Do not start the app/database, run a production build or rerun application tests for prose changes.
+- Test-tooling-only changes require the affected script's syntax/type/lint checks and checks of its success and failure behavior. Build/start the application only when the tooling change depends on real application integration.
+- All application behavior changes require a final passing `npm run typecheck` and `npm run lint`. During development, prefer affected unit tests, incremental TypeScript checks and linting changed files. Cached lint is available with `npm run lint -- --cache --cache-location .anilearn/eslint-cache`; keep the final full-project lint check.
+- Retain cheap unit/provider checks when running them is simpler than maintaining selection logic. A test belongs at each layer that verifies a distinct risk: API rejection of a stale note revision and UI preservation of its draft are both useful.
+
+| Changed area | Required affected checks | Browser scope / additional triggers |
+| --- | --- | --- |
+| Free questions, topics, retries or greeting/goodbye | `npm run free:test`; `npm run free:audit` when server persistence/protocol changes | Free classroom: affected question/topic/retry/restore/exit flow |
+| Reading phases, anchors, personal notes or analysis | `npm run reading:test`; `node output/audit/upgrade-api.mjs` when server state, persistence or preparation changes | Reading classroom: silent entry, affected selection/note/phase/focus/completion flow and refresh recovery |
+| EPDL plans, problem analysis, coverage or snapshots | `node --import tsx --test src/lib/server/learning-plan.test.ts`; select `fix-api.mjs` and/or `upgrade-api.mjs` for the changed rules | Exam classroom: affected problem/plan/board/progress flow |
+| LLM adapters, proxies, streaming tags or language repair | `npm run llm:test`; `node output/audit/provider-audit.cjs`; API suites for affected consumers | Representative turns in all affected modes; configured live connection smoke when changing transport/provider configuration |
+| Shared classroom composer, attachments, event queue or speech controller | Relevant free/reading/input/provider checks; API checks if the request contract changes | All affected classrooms: send and restore; shared playback changes also need FIFO, mute, interruption, fallback and cleanup checks |
+| Markdown, math normalization, reveal tokens or board rendering/export | `npm run math:test`; provider/parser checks when tag/reveal handling changes | Affected rendering and exported notes; voice/reveal checks when tokenization changes |
+| PDF/images, clipboard or Google Docs import | `npm run google-docs:test` for Docs changes; affected upload/API checks | Affected paper/reading import, review and limits; both consumers when shared media/import code changes |
+| Settings, model bindings or tutor configuration | Provider/free checks and settings/API checks for changed fields | Affected save/preserve/clear/masking/preview behavior and one consuming flow |
+| Schema, locks or shared persistence | API suites for every affected consumer; additive migration/legacy checks | Concurrency, idempotency, stale revisions, snapshots, cancellation and lock release remain required when affected |
+| Launcher, process ownership or lifecycle | `npm run launcher:test`; lifecycle audit when process/container management changes | Use the owned lifecycle-audit environment; no classroom tour required |
+| Layout, navigation or styles | Final typecheck/lint and affected UI checks | Desktop `1366×768` and mobile `390×844` for affected layouts; reuse API results when server behavior is unchanged |
+
+- `free:test` already includes `llm.test.ts`; omit a second `llm:test` run when that same version has passed through `free:test`.
+- The API audit scripts currently run whole suites. Select the applicable script, then let its complete assertions run; do not invent filtering flags or claim individual cases were selected. Extra inexpensive coverage inside a selected suite is acceptable.
+- The 1.5 MB-plus / 1,003-paragraph article and actual restart checks are required for changes to chunking, OCR/context preparation, background work, recovery or relevant persistence. Lifecycle integration is required for launcher lifecycle changes. These are not mandatory additions to an unrelated visual/prose change; they may still run inside a selected whole API suite.
+- For a release or a change to cross-mode contracts, schema, locks, LLM transport or shared playback, broaden to all affected consumers and one main browser flow per classroom. Preserve all explicitly requested acceptance cases. Do not run unrelated Launcher/Docs/import flows solely because another feature changed.
+
+### Build once and reuse the environment
+
+1. Complete the affected fast checks and resolve their failures before starting expensive integration work. Independent unit, provider and static checks may run in parallel; serialize operations that mutate shared settings, fixtures, ports or generated files.
+2. Run `npm run build` for changed application code/configuration before production-runtime API/browser acceptance and final delivery. Reuse a successful build for unchanged application inputs. Documentation/report-only edits do not invalidate it; application code, dependencies, config or relevant environment changes do.
+3. Start one owned isolated audit runtime and reuse its database/mock provider for selected API suites and browser acceptance. Run suites that mutate global model/settings fixtures sequentially, then establish the browser fixture explicitly. Reuse valid state; reset only owned test records as needed.
+4. When application changes require another build, stop the identified preview before building and restart it afterward. Keep the owned mock service/database when safe. Do not run dev/start/build processes concurrently against the same `.next` output.
+5. After the selected checks pass, rerun only checks invalidated by further edits, failures or changed fixtures/configuration. Record enough context to distinguish current results from historical results: tested source revision/diff, command, environment, fixture/model mode and outcome.
+6. Shut down and verify the owned test environment through the cleanup rules below. Index sync, migrations, Git operations and cleanup are delivery operations; report them separately from test coverage.
+
+### Browser acceptance and pass criteria
+
+- `@Browser` is useful for discovery, visible interaction and unknown UI defects. Playwright CLI is the default for repeatable acceptance and saved evidence. Do not repeat the same stable scenario with both tools just to compare them; a user-requested tool switch reuses valid findings and reruns affected cases.
+- Read the Playwright skill and check `npx` before using its wrapper. Reuse a named browser session. Use current snapshots and accessible roles/labels for ordinary controls; refresh refs after meaningful UI changes. For precise selection/drag tests, use a bounded reusable interaction rather than repeatedly guessing screen coordinates.
+- Prepare most scenario state through the isolated fixture/API. Keep one full user entry-to-exit path for a newly introduced or substantially changed mode; focused regressions can start at the affected state. Do not replay upload, all five analysis angles and every historical flow before each small UI check.
+- Reuse existing scripts through the skill's CLI where suitable. Save stable sequences with explicit assertions for reuse; CLI clicks/snapshots alone are not an unattended regression suite. Do not add a new testing framework for a routine fix.
+- Wait for the expected request, rendered state or playback condition with a bounded timeout. Use fixed delays only when elapsed time is the behavior being measured, such as reveal progress or timeout fallback. Preserve actual browser selection/playback checks where DOM/API-only checks cannot prove the interaction.
+- Every claimed automated pass needs an assertion or an aggregate that throws/returns a nonzero status on failure. An `outcome: "fail"` report row must fail the run. Observation-only rows, screenshots and a clean console require an explicit recorded review; do not count them as automatic passes. Never relax an assertion merely to match an unexpected result.
+- Inspect console and relevant network requests; absence of a tutor bubble alone does not prove silent reading made no model/TTS request. Assert persistence through refresh/API state and verify critical UI behavior, not only HTTP success.
+- Save screenshots at changed/important states and failure traces/logs when useful under `output/playwright/`. Avoid a screenshot and full snapshot after every unchanged step. A mobile viewport checks responsive layout; it does not by itself prove physical-device touch/audio behavior.
+
+### Separate deterministic and live validation
+
+- Use isolated mock models/audio for repeatable protocol, state, concurrency, playback-order and fallback checks. Preserve separate checks for server contracts and browser behavior.
+- When transport/proxy/provider binding, teaching prompts or voice behavior changes, run a small relevant live smoke with the project's existing configured service when available, unless the user requests mock-only validation. Include the actual reported failure where applicable; do not replay the whole mock matrix against paid services.
+- If live credentials/service access are unavailable, complete deterministic checks and explicitly mark real model/Fish behavior unverified. An observed live failure remains a failure or limitation even when mock suites pass.
+- Teaching correctness, OCR completeness and Japanese speech quality need representative real materials, reference answers and listening review. Report these separately from software regression results; retain the verification limits below.
 
 ## Commands
 
@@ -214,6 +270,10 @@ npm run build        # next build
 npm run start        # next start (requires a completed build)
 npm run lint
 npm run typecheck    # tsc --noEmit
+npm run math:test    # Markdown/LaTeX and rendering checks
+npm run free:test    # free input/prompts/protocol, including llm.test.ts
+npm run llm:test     # LLM/proxy/error checks when free:test is not selected
+npm run free:audit   # isolated free-session API regression
 npm run google-docs:test # link validation and Google Docs export safety checks
 npm run launcher     # Windows full-screen TUI; auto-start app and PostgreSQL
 npm run launcher:test # launcher core and terminal-layout regression tests
@@ -233,10 +293,10 @@ Requires `DATABASE_URL` in the environment or root `.env.local`. `drizzle.config
 - After completing work and verification, shut down AniLearn's app process tree and local database by default, including any preview started for the task, unless the user explicitly asks to leave it running. Verify shutdown before reporting completion.
 - When closing AniLearn, stop only the identified project server process tree. Stop its local database with `docker compose --env-file .env.local stop`; preserve the `anilearn_postgres_data` volume. Do not stop all Node processes or Docker Desktop.
 - A user's shutdown request takes precedence over automatically starting a preview. Do not restart the app after a documentation-only update.
-- Run provider/parser checks with `node output/audit/provider-audit.cjs`. Results are written to `output/audit/fix-provider-results.json`.
-- API regression requires a completed build and PostgreSQL. Start `node output/audit/runtime.cjs`, then run `node output/audit/fix-api.mjs`. The harness creates the isolated `anilearn_audit_20261007` database, mock provider on `127.0.0.1:4107`, and app on `127.0.0.1:3107`. It refuses to reuse an existing test database.
+- When selected by the verification workflow, run provider/parser checks with `node output/audit/provider-audit.cjs`. Results are written to `output/audit/fix-provider-results.json`.
+- Selected API regression requires a completed build and PostgreSQL. Start `node output/audit/runtime.cjs` once, then run the applicable `node output/audit/fix-api.mjs`, `node output/audit/upgrade-api.mjs`, and/or `npm run free:audit` suites sequentially. The harness creates the isolated `anilearn_audit_20261007` database, mock provider on `127.0.0.1:4107`, and app on `127.0.0.1:3107`. It refuses to reuse an existing test database.
 - Shut down the harness through `GET http://127.0.0.1:4107/shutdown` and verify cleanup. Never point its SQL fixture endpoint at the user's application database or delete a pre-existing test database without checking ownership.
-- Browser scripts are `output/audit/browser-audit.js`, `browser-upload-settings.js`, and `browser-fix-edge.js` for classroom/voice, upload/settings, and interruption/timeout flows. Run against the isolated harness using Playwright; screenshots belong in `output/playwright/`.
+- Browser scripts are `output/audit/browser-audit.js`, `browser-upload-settings.js`, and `browser-fix-edge.js` for classroom/voice, upload/settings, and interruption/timeout flows. Select relevant flows and run against the isolated harness through Playwright CLI; screenshots belong in `output/playwright/`. Some existing report rows are observational or only record `outcome`; apply the pass criteria above when reviewing them, and add hard assertions when maintaining those scenarios.
 - Historical `api-audit.mjs` and the original `*-results.json` record defects before repair. Use `fix-api.mjs` and `fix-*-results.json` for current expectations. The audit and repair reports are in `output/audit/`.
 
 ## Verification limits

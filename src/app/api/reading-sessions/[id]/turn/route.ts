@@ -12,6 +12,7 @@ import { tutorSpeechRules } from "@/lib/server/prompts";
 import { hasJapaneseText } from "@/lib/text";
 import { readChatInputRequest } from "@/lib/server/chat-input";
 import type { ReadingDTO, ReadingFocus, ReadingLearningState, ReadingMessage, ReadingSelection, ReadingSelectionTask, ReadingTurnEvent, ReadingTurnRequest, TutorDTO } from "@/lib/types";
+import { compatibleReadingSelection, readingDocument, readingSelectionToAnchor } from "@/lib/reader/reading-adapter";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -115,7 +116,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     if (parsed.images.length && ["goodbye", "analysis_summary"].includes(body.intent ?? "")) return Response.json({ error: "此操作不能附带图片。" }, { status: 400 });
     if (body.intent === "goodbye" && (parsed.text || parsed.images.length)) return Response.json({ error: "结束课堂时不能附带提问内容。" }, { status: 400 });
 
-    const selection = validateReadingSelection(bundle.reading, body.selection);
+    const selection = validateReadingSelection(bundle.reading, compatibleReadingSelection(bundle.reading, body.selection, body.readerAnchor));
+    const readerAnchor = readingSelectionToAnchor(readingDocument(bundle.reading), selection);
     if (body.selectionTask !== undefined && !isReadingSelectionTask(body.selectionTask)) return Response.json({ error: "划词操作无效。" }, { status: 400 });
     const selectionTask = body.selectionTask ?? (selection ? inferReadingSelectionTask(parsed.text) : null);
     if (selectionTask && (!selection || parsed.images.length || body.intent)) return Response.json({ error: "划词快捷操作需要原文选区，不能同时附带图片或其他课堂动作。" }, { status: 400 });
@@ -147,7 +149,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     if ((parsed.text || parsed.images.length || selection) && !savedUser) {
       await db.insert(readingMessages).values({
         sessionId: id, turnId, paragraphIdx: idx, role: "user", language: "zh-CN", content: parsed.text,
-        attachments: parsed.images, phase: learning.phase, focus, selection,
+        attachments: parsed.images, phase: learning.phase, focus, selection, readerAnchor,
       });
     }
     bundle = await loadReadingSession(id);

@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { readingPersonalNotes } from "@/db/schema";
 import { loadReadingSession, readingPersonalNoteDTO, validId } from "@/lib/server/readings";
 import { validateReadingSelection } from "@/lib/server/reading-learning";
+import { compatibleReadingSelection, readingDocument, readingSelectionToAnchor } from "@/lib/reader/reading-adapter";
 
 export const dynamic = "force-dynamic";
 const MAX_NOTE_BYTES = 64 * 1024;
@@ -23,12 +24,16 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string; n
     .where(and(eq(readingPersonalNotes.id, noteId), eq(readingPersonalNotes.sessionId, sessionId)));
   if (!existing) return Response.json({ error: "笔记不存在。" }, { status: 404 });
   let selection = existing.selection;
-  if (body.selection !== undefined) {
-    try { selection = existing.kind === "annotation" ? validateReadingSelection(bundle.reading, body.selection) : null; }
+  if (body.selection !== undefined || body.readerAnchor !== undefined) {
+    try {
+      if (existing.kind !== "annotation" && body.readerAnchor != null) throw new Error("全文笔记不能绑定原文选区。");
+      selection = existing.kind === "annotation" ? validateReadingSelection(bundle.reading, compatibleReadingSelection(bundle.reading, body.selection, body.readerAnchor)) : null;
+      if (existing.kind === "annotation" && !selection) throw new Error("批注需要关联文章原文选区。");
+    }
     catch (error) { return Response.json({ error: error instanceof Error ? error.message : "原文选区无效。" }, { status: 400 }); }
   }
   const [updated] = await db.update(readingPersonalNotes).set({
-    content: body.content, selection, revision: sql`${readingPersonalNotes.revision} + 1`, updatedAt: new Date(),
+    content: body.content, selection, readerAnchor: readingSelectionToAnchor(readingDocument(bundle.reading), selection), revision: sql`${readingPersonalNotes.revision} + 1`, updatedAt: new Date(),
   }).where(and(
     eq(readingPersonalNotes.id, noteId), eq(readingPersonalNotes.sessionId, sessionId), eq(readingPersonalNotes.revision, body.revision),
   )).returning();

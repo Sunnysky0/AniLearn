@@ -6,6 +6,8 @@ import { toTutorDTO } from "@/lib/server/data";
 import { tryOperationLock } from "@/lib/server/locks";
 import { firstUnconfirmedFocus, isReadingFocus, requiredReadingFoci } from "@/lib/server/reading-learning";
 import type { ReadingFocus, ReadingLearningState } from "@/lib/types";
+import { readingDocument } from "@/lib/reader/reading-adapter";
+import { validateReaderPosition } from "@/lib/reader/anchors";
 export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
 export async function GET(_req: Request, ctx: Ctx) {
@@ -25,8 +27,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
     let learning: ReadingLearningState = { ...existing, focusStatus: { ...existing.focusStatus }, analysisNotes: { ...existing.analysisNotes } };
     let patch: Partial<typeof readingSessions.$inferInsert> = {};
     if (action === "bookmark") {
-      if (!Number.isInteger(body.currentIdx) || body.currentIdx < 0 || body.currentIdx >= bundle.reading.paragraphs.length) return Response.json({ error: "段落编号无效" }, { status: 400 });
-      patch = { currentIdx: body.currentIdx };
+      const document = readingDocument(bundle.reading);
+      const readerPosition = body.readerPosition == null ? null : validateReaderPosition(document, body.readerPosition);
+      if (body.readerPosition != null && !readerPosition) return Response.json({ error: "阅读位置与当前文章不匹配。" }, { status: 400 });
+      const positionIdx = readerPosition ? document.blocks.findIndex((block) => block.id === readerPosition.blockId) : -1;
+      const currentIdx = body.currentIdx ?? positionIdx;
+      if (!Number.isInteger(currentIdx) || currentIdx < 0 || currentIdx >= bundle.reading.paragraphs.length || (positionIdx >= 0 && positionIdx !== currentIdx)) return Response.json({ error: "段落编号无效" }, { status: 400 });
+      patch = { currentIdx, readerPosition };
     } else {
       if (!Number.isSafeInteger(body.stateRevision) || body.stateRevision !== existing.stateRevision) {
         return Response.json({ error: "课堂状态已变化，请同步后重试。", stateRevision: existing.stateRevision }, { status: 409 });

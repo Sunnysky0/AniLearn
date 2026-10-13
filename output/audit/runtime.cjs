@@ -3,6 +3,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { Pool } = require('pg');
+const { bookMockResponse } = require('./book-mock.cjs');
 
 const root = path.resolve(__dirname, '../..');
 require('@next/env').loadEnvConfig(root);
@@ -58,7 +59,11 @@ async function init() {
   await admin.query(`CREATE DATABASE ${dbName}`);
   ownsDatabase = true;
   const auditTimeoutPreload = path.join(root, 'output/audit/short-llm-timeout.cjs');
-  const env = { ...process.env, DATABASE_URL: auditUrl.href, NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${auditTimeoutPreload}`].filter(Boolean).join(' ') };
+  const auditInheritedEnv = { ...process.env };
+  for (const name of Object.keys(auditInheritedEnv)) {
+    if (/API_KEY|API_TOKEN|AUTH_TOKEN|^(?:HTTP|HTTPS|ALL)_PROXY$|^(?:FISH|OPENAI|ANTHROPIC|CLAUDE|XAI|GROK|GEMINI|GOOGLE_GENERATIVE_AI)_/i.test(name)) delete auditInheritedEnv[name];
+  }
+  const env = { ...auditInheritedEnv, DATABASE_URL: auditUrl.href, NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${auditTimeoutPreload}`].filter(Boolean).join(' ') };
   appEnv = env;
   const schema = spawn(process.execPath, [path.join(root, 'node_modules/drizzle-kit/bin.cjs'), 'push', '--force', '--config=drizzle.config.ts'], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let schemaOutput = '';
@@ -98,7 +103,10 @@ async function init() {
       if (body.model === 'audit-reading-timeout' && system.startsWith('转写本页')) await new Promise(() => {});
       let output = normal;
       let ending = 'stop';
-      if (system.includes('本课堂没有预设试卷') && system.includes('<topic mode=')) {
+      const bookCandidate = bookMockResponse(body, system, inputText);
+      if (bookCandidate) {
+        output = bookCandidate.output; ending = bookCandidate.ending;
+      } else if (system.includes('本课堂没有预设试卷') && system.includes('<topic mode=')) {
         if (system.includes('首次欢迎规则')) {
           output = msg('你好，我是你的导师。今天想从什么问题开始？', '[curious] こんにちは。今日はどんなことから始めましょうか。') + '<action>wait</action>';
         } else if (system.includes('告别规则')) {

@@ -25,11 +25,15 @@ import type {
   ReadingLearningState,
   ReadingAnalysisDraft,
   ReadingSelection,
+  ReaderPosition,
+  ReaderAnchor,
 } from "../lib/types";
 import { DEFAULT_TUTOR_AVATAR } from "../lib/types";
 
 const createdAt = () =>
   timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
+
+export * from "./books-schema";
 
 export const appSettings = pgTable("app_settings", {
   id: integer("id").primaryKey(),
@@ -181,6 +185,7 @@ export const readingSessions = pgTable("reading_sessions", {
   notes: jsonb("notes").$type<Record<string, string[]>>().notNull().default({}),
   learningState: jsonb("learning_state").$type<ReadingLearningState>(),
   analysisDraft: jsonb("analysis_draft").$type<ReadingAnalysisDraft>(),
+  readerPosition: jsonb("reader_position").$type<ReaderPosition>(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 export const readingTurns = pgTable("reading_turns", {
@@ -203,6 +208,7 @@ export const readingPersonalNotes = pgTable("reading_personal_notes", {
   kind: text("kind").notNull(),
   content: text("content").notNull().default(""),
   selection: jsonb("selection").$type<ReadingSelection | null>(),
+  readerAnchor: jsonb("reader_anchor").$type<ReaderAnchor>(),
   revision: integer("revision").notNull().default(0),
   createdAt: createdAt(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -218,6 +224,7 @@ export const readingMessages = pgTable("reading_messages", {
   turnId: integer("turn_id").references(() => readingTurns.id, { onDelete: "cascade" }),
   phase: text("phase"), focus: text("focus"),
   selection: jsonb("selection").$type<ReadingSelection | null>(),
+  readerAnchor: jsonb("reader_anchor").$type<ReaderAnchor>(),
 }, (t) => [index("reading_messages_session_idx").on(t.sessionId, t.id), index("reading_messages_turn_idx").on(t.turnId, t.id)]);
 
 export const boards = pgTable(

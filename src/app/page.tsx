@@ -70,7 +70,7 @@ export default async function HomePage() {
       <main className="mx-auto max-w-7xl px-4 pb-14 pt-7 sm:px-6 sm:pt-10">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-5">
           <div>
-            <p className="mb-2 text-sm text-[#626262]">试卷 · 外刊 · 自由提问</p>
+            <p className="mb-2 text-sm text-[#626262]">试卷 · 外刊 · 典籍 · 自由提问</p>
             <h1 className="text-[32px] font-bold leading-tight">学习工作台</h1>
           </div>
           <Link href="/papers/new" className="ink-button text-sm">
@@ -93,6 +93,7 @@ export default async function HomePage() {
               : `讲解模型未配置`}
           </span>
           <span>{ttsReady ? "日语语音已配置" : "纯文字模式"}</span>
+          <Link href="/books" className="inline-flex items-center gap-1 text-[#171717] underline"><BookOpen className="h-3.5 w-3.5" />打开典籍书架</Link>
           {!llmReady && (
             <Link href="/settings" className="ml-auto text-[#171717] underline">
               前往设置
@@ -194,7 +195,7 @@ export default async function HomePage() {
       </main>
       <footer className="mx-auto flex max-w-7xl flex-wrap justify-between gap-2 border-t-2 border-[#171717] px-4 py-5 text-xs text-[#626262] sm:px-6">
         <span className="font-serif font-semibold text-[#171717]">AniLearn</span>
-        <span>试卷 · 外刊 · 自由提问</span>
+        <span>试卷 · 外刊 · 典籍 · 自由提问</span>
       </footer>
     </div>
   );

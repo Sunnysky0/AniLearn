@@ -29,13 +29,14 @@ export function readingSessionDTO(row: typeof readingSessions.$inferSelect): Rea
     id: row.id, readingId: row.readingId, tutorId: row.tutorId, currentIdx: row.currentIdx,
     status: row.status, progress: row.progress, notes: row.notes,
     learning: row.learningState ?? initialReadingLearningState(row), updatedAt: row.updatedAt.toISOString(),
+    readerPosition: row.readerPosition ?? null,
   };
 }
 type ReadingMessageRow = typeof readingMessages.$inferSelect;
 type ReadingMessageMetadata = Omit<ReadingMessageRow, "attachments"> & { attachmentCount: number };
 export function readingPersonalNoteDTO(row: typeof readingPersonalNotes.$inferSelect): ReadingPersonalNote {
   return { id: row.id, clientId: row.clientId, kind: row.kind as ReadingPersonalNote["kind"], content: row.content,
-    selection: row.selection, revision: row.revision, updatedAt: row.updatedAt.toISOString() };
+    selection: row.selection, readerAnchor: row.readerAnchor ?? null, revision: row.revision, updatedAt: row.updatedAt.toISOString() };
 }
 
 export function readingMessageDTO(row: Omit<ReadingMessageRow, "attachments"> & { attachments?: string[]; attachmentCount?: number }): ReadingMessage {
@@ -45,7 +46,7 @@ export function readingMessageDTO(row: Omit<ReadingMessageRow, "attachments"> & 
     paragraphIdx: row.paragraphIdx, kind: row.kind as ReadingMessage["kind"],
     language: row.language as ReadingMessage["language"], attachmentCount,
     phase: row.phase === "free_reading" || row.phase === "article_analysis" ? row.phase : "legacy",
-    focus: row.focus as ReadingMessage["focus"], selection: row.selection,
+    focus: row.focus as ReadingMessage["focus"], selection: row.selection, readerAnchor: row.readerAnchor ?? null,
     attachments: Array.from({ length: attachmentCount }, (_, index) =>
       "/api/reading-sessions/" + row.sessionId + "/messages/" + row.id + "/attachments/" + index),
   };
@@ -116,6 +117,7 @@ export async function loadReadingSession(id: number) {
     role: readingMessages.role, kind: readingMessages.kind, language: readingMessages.language,
     content: readingMessages.content, speech: readingMessages.speech,
     phase: readingMessages.phase, focus: readingMessages.focus, selection: readingMessages.selection,
+    readerAnchor: readingMessages.readerAnchor,
     turnId: readingMessages.turnId,
     attachmentCount: sql<number>`jsonb_array_length(${readingMessages.attachments})::int`,
   }).from(readingMessages).where(eq(readingMessages.sessionId, id)).orderBy(asc(readingMessages.id));

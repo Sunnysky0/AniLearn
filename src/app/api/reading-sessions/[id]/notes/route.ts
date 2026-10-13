@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { readingPersonalNotes } from "@/db/schema";
 import { loadReadingSession, readingPersonalNoteDTO, validId } from "@/lib/server/readings";
 import { validateReadingSelection } from "@/lib/server/reading-learning";
+import { compatibleReadingSelection, readingDocument, readingSelectionToAnchor } from "@/lib/reader/reading-adapter";
 
 export const dynamic = "force-dynamic";
 const MAX_NOTE_BYTES = 64 * 1024;
@@ -35,9 +36,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
   try {
     const content = validContent(body.content, kind === "document");
-    const selection = kind === "annotation" ? validateReadingSelection(bundle.reading, body.selection) : null;
+    const selection = kind === "annotation" ? validateReadingSelection(bundle.reading, compatibleReadingSelection(bundle.reading, body.selection, body.readerAnchor)) : null;
+    if (kind === "document" && body.readerAnchor != null) throw new Error("全文笔记不能绑定原文选区。");
+    const readerAnchor = readingSelectionToAnchor(readingDocument(bundle.reading), selection);
     if (kind === "annotation" && !selection) throw new Error("批注需要关联文章原文选区。");
-    const [inserted] = await db.insert(readingPersonalNotes).values({ sessionId, clientId, kind, content, selection })
+    const [inserted] = await db.insert(readingPersonalNotes).values({ sessionId, clientId, kind, content, selection, readerAnchor })
       .onConflictDoNothing({ target: [readingPersonalNotes.sessionId, readingPersonalNotes.clientId] }).returning();
     if (inserted) return Response.json(readingPersonalNoteDTO(inserted), { status: 201 });
     const [existing] = await db.select().from(readingPersonalNotes)

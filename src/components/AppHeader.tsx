@@ -22,6 +22,7 @@ const NAV = [
   { href: "/", label: "首页" },
   { href: "/papers", label: "试卷库" },
   { href: "/readings", label: "外刊导读" },
+  { href: "/books", label: "典籍导读" },
   { href: "/free", label: "自由提问" },
   { href: "/tutors", label: "我的导师" },
   { href: "/settings", label: "设置" },
@@ -40,7 +41,7 @@ export function AppHeader() {
             <div className="text-[10px] text-[#626262]">你的专属 AI 导师</div>
           </div>
         </Link>
-        <nav className="hidden items-center gap-1 text-sm md:flex">
+        <nav className="hidden items-center gap-1 text-sm lg:flex">
           {NAV.map((n) => (
             <Link
               key={n.href}
@@ -62,7 +63,7 @@ export function AppHeader() {
           </Link>
         </div>
       </div>
-      <nav className="flex gap-1 overflow-x-auto border-t border-[#c8c8c8] px-4 pb-2 pt-2 text-sm md:hidden">
+      <nav className="flex gap-1 overflow-x-auto border-t border-[#c8c8c8] px-4 pb-2 pt-2 text-sm lg:hidden">
         {NAV.map((n) => (
           <Link
             key={n.href}

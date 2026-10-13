@@ -8,7 +8,7 @@ Before any Next.js work, find and read the relevant doc in `node_modules/next/di
 
 # AniLearn
 
-AI one-to-one tutor platform for exam learning and English/Japanese article reading. Exam materials get a complete directory and plan-selected analysis, then a streaming classroom: chat on the left, blackboard on the right, Japanese TTS in sync with Chinese text.
+AI one-to-one tutor platform for exam learning, English/Japanese article reading and chapter-based book reading. Exam materials get a complete directory and plan-selected analysis, then a streaming classroom: chat on the left, blackboard on the right, Japanese TTS in sync with Chinese text.
 
 Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). Created by Claude Opus 5.5.
 
@@ -16,6 +16,8 @@ Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). 
 
 - **EPDL (Exam Paper Driven Learning).** The paper supplies a complete stable inventory. Five paces select representative problems and concrete goals before detailed analysis. Default pace is 纲举目张; only 条分缕析 and legacy sessions require all problems and all four core topics.
 - **Readings.** Independent English/Japanese articles, unlimited source pages, background per-page OCR, paginated source review, and two-stage sessions: silent free reading with user-initiated questions/notes, followed by guided whole-article analysis. OCR and long-article context preparation resume from saved work after failure or restart. User notes stay separate from tutor analysis. Chinese explanation and labeled foreign quotes/examples are separate content types; speech remains Japanese.
+- **Books.** EPUB/MOBI import, corrected logical chapters and immutable versions. Built-in Selected Dialogues of Plato initializes without model/TTS requests. Silent reading precedes user-confirmed chapter analysis; every focus requires explicit confirmation. All main chapters read unlocks an optional whole-book summary. Annotations, chapter notes and book notes are shared per content version; chat and learning progress remain per tutor session. Preparation and imports save checkpoints and resume manually after failure/restart.
+- **Shared reader.** Articles and books use `ReaderDocument`, UTF-16 text anchors and character positions with a continuous internal window. `Reader` owns typography, native selection, search, annotations, footnotes and temporary inspection; `ReadingWorkspace` owns desktop tutor resizing/collapse and the mobile discussion panel. Never replace bookmarks during inspection or let layout changes move the saved character anchor. Old article selections, snapshots and request hashes remain compatible when optional new fields are omitted.
 - **Custom tutors.** Personality, teaching style, speaking style, avatar, greeting, and Fish Audio voice (`voiceId` + Japanese `voiceStyle` tag). Every tutor can teach every subject; the database subject column is retained only for compatibility.
 - **Models.** OpenAI / Anthropic / Grok (xAI) / Gemini, via API. No vendor SDKs — raw `fetch` + SSE in `src/lib/server/llm.ts`.
 - **Voice.** Fish Audio TTS (`s2.1-pro`). Chat and board are Chinese; spoken audio is Japanese. Text in the chat bubble reveals in sync with playback.
@@ -54,7 +56,7 @@ Subjects: `数学 物理 化学 生物 语文 英语 历史 地理 政治`.
 └──────────────┴─────────────────────────────┘
 ```
 
-Other routes: `/` home, `/papers` + `/papers/new` + `/papers/[id]`, `/tutors` + `/tutors/[id]`, `/settings`, `/classroom/[id]`.
+Other routes: `/` home, `/papers` + `/papers/new` + `/papers/[id]`, `/readings` + `/readings/new` + `/readings/[id]`, `/books` + `/books/new` + `/books/[id]`, `/tutors` + `/tutors/[id]`, `/settings`, `/classroom/[id]`, `/reading-classroom/[id]`, `/book-classroom/[id]`.
 
 ## Architecture
 
@@ -112,6 +114,10 @@ Settings keys: DB row `app_settings.id = 1`, else env. Provider env: `OPENAI_API
 DB (Drizzle, `src/db/schema.ts`): `app_settings`, `tutors`, `papers`, `paper_pages` (base64 image or UTF-8 text per source page, identified by MIME), `problems`, `sessions`, `messages`, `boards` (unique on session+problemIdx). Text sources use `text/markdown`, `text/x-tex`, or `application/x-tex`; send their decoded source to the LLM as text, never as an image. Do not compile TeX or resolve external file dependencies. `PaperDTO.pageMimes` is optional for legacy snapshots and enables source-aware previews.
 `reading_sessions.learning_state` stores two-phase teaching progress; `analysis_draft` stores resumable whole-article context preparation. `reading_turns` provides idempotent streaming-turn replay, and `reading_personal_notes` stores learner-owned notes with independent revisions. `reading_messages` also stores chat attachments, phase/focus metadata and validated source anchors. Apply additive reading changes with `npm run db:push`, or review `docs/migrations/20261011-reading-two-phase-learning.sql`; keep the earlier attachment migration when upgrading from a pre-attachment database.
 
+Book contracts are re-exported from `src/lib/book-types.ts`; tables from `src/db/books-schema.ts`. Review `docs/migrations/20261013-books-shared-reader.sql` before upgrading an existing database. Book APIs under `/api/books` cover multipart upload (50 MiB; 256 MiB expanded), manual import resume, directory correction/confirmation, immutable chapter documents and internal resources. `/api/book-sessions` covers session creation, bookmark/chapter/focus mutations, three private note kinds, streaming idempotent turns, checkpointed chapter preparation and optional whole-book summary. MOBI requires an absolute `CALIBRE_EBOOK_CONVERT` path; only the conversion's own child may be terminated on timeout. Preserve raw sources and historical versions.
+
+Book turn context is limited to current-question text, the current chapter's opened preparation, confirmed-read prior chapter memories and relevant history. Later chapters never enter automatic context, even if previously visited. Whole-book personal notes require explicit attachment. Publishing directory changes creates a new version; existing classrooms and notes keep their version. Successful turns must remain successful if a post-commit response/read fails. Use the separate lock pool and book-specific namespaces consistently across processes.
+
 Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullable for legacy sessions), and `sessions.coverage` (default `{}`). Sync schema before running this version in another environment. Do not remove these fields or use a destructive schema reset to resolve migration issues.
 
 ## Analysis and classroom integrity
@@ -122,7 +128,7 @@ Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullab
 - Draft problem events use provisional negative IDs. After publication, load persisted problems rather than treating provisional IDs as database IDs.
 - Analysis continues when its browser stream disconnects. A process restart stops the task, but preserves completed draft work. The student must click to resume; there is no durable job worker or automatic restart.
 - Reading OCR starts after every expected source page uploads, runs with Next.js `after`, saves each recognized page in `readings.draft`, and continues when the browser closes. A process restart leaves the saved pages intact; the article page reports an unlocked stale run as resumable.
-- Reading OCR reads only the current source payload, makes at most two image-recognition attempts per page, and saves outside the retry loop. `[空白页]` stores an empty draft value whose key still counts as complete. Reading tasks have no whole-article deadline; every LLM call retains its 180-second timeout. Confirmation has no aggregate 1.5 MB or 1,000-paragraph cap, but each imported text source retains its 1.5 MB cap. The reading classroom renders 50 source paragraphs per group.
+- Reading OCR reads only the current source payload, makes at most two image-recognition attempts per page, and saves outside the retry loop. `[空白页]` stores an empty draft value whose key still counts as complete. Reading tasks have no whole-article deadline; every LLM call retains its 180-second timeout. Confirmation has no aggregate 1.5 MB or 1,000-paragraph cap, but each imported text source retains its 1.5 MB cap. The shared reader preloads its internal window while retaining DOM involved in native selection; there are no user-facing paragraph groups.
 - Reading classrooms start in `free_reading` without a model or TTS request. Text selection is verified against the session snapshot; bookmark movement is independent of article-analysis focus. `article_analysis` uses saved per-chunk context, a separate preparation lock, and a manual resume after failure/restart. Three general and five literary analysis angles require explicit student confirmation. Personal notes are isolated from tutor-generated analysis, with per-note revision checks. Legacy reading progress stays visible as history and never implies article-analysis completion.
 - Reading selection shortcuts bind exact selected text separately from supporting context and carry the current focus in both phases. Buffer shortcut output; require ordered exact visible-text quotes, Chinese explanation and a terminal `wait`. Retry only a target/shape validation failure once, within the original deadline. Prepare speech, atomically save all accepted tutor messages and turn success, then emit events. Never retry cancellation, transport, speech-repair or database errors as a selection failure. This guard checks targets and shape, not semantic correctness. Omitted `selectionTask` preserves legacy request hashes and successful replay.
 - `tryOperationLock` must reserve a connection from the separate lock pool, never the database work pool. Release on success, failure, cancellation, and pre-stream errors. Keep paper/session lock namespaces consistent across app processes.
@@ -221,6 +227,7 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 | --- | --- | --- |
 | Free questions, topics, retries or greeting/goodbye | `npm run free:test`; `npm run free:audit` when server persistence/protocol changes | Free classroom: affected question/topic/retry/restore/exit flow |
 | Reading phases, anchors, personal notes or analysis | `npm run reading:test`; `node output/audit/upgrade-api.mjs` when server state, persistence or preparation changes | Reading classroom: silent entry, affected selection/note/phase/focus/completion flow and refresh recovery |
+| Book import, immutable versions, chapter learning or shared reader | `npm run books:test`; `node output/audit/books-api.mjs` for persistence/preparation; `reading:test` and `upgrade-api.mjs` for shared article contracts | `browser-books.js` through Playwright CLI: default Plato entry-to-exit, native selection, notes, typography/character restore, footnotes, desktop/mobile and affected old article flows |
 | EPDL plans, problem analysis, coverage or snapshots | `node --import tsx --test src/lib/server/learning-plan.test.ts`; select `fix-api.mjs` and/or `upgrade-api.mjs` for the changed rules | Exam classroom: affected problem/plan/board/progress flow |
 | LLM adapters, proxies, streaming tags or language repair | `npm run llm:test`; `node output/audit/provider-audit.cjs`; API suites for affected consumers | Representative turns in all affected modes; configured live connection smoke when changing transport/provider configuration |
 | Shared classroom composer, attachments, event queue or speech controller | Relevant free/reading/input/provider checks; API checks if the request contract changes | All affected classrooms: send and restore; shared playback changes also need FIFO, mute, interruption, fallback and cleanup checks |
@@ -279,6 +286,7 @@ npm run google-docs:test # link validation and Google Docs export safety checks
 npm run launcher     # Windows full-screen TUI; auto-start app and PostgreSQL
 npm run launcher:test # launcher core and terminal-layout regression tests
 npm run reading:test  # reading phase and source-selection validation
+npm run books:test    # ebook import, chapter states, context boundaries and reader anchors
 codegraph sync       # update the code index after code changes
 ```
 

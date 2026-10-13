@@ -8,7 +8,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "AniLearn · AI 一对一学习导师",
   description:
-    "AniLearn：试卷学习、外刊导读与自由提问，一对一 AI 导师配有中文讲解、日语语音与板书。",
+    "AniLearn：试卷学习、外刊与典籍导读、自由提问，一对一 AI 导师配有中文讲解、日语语音与板书。",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

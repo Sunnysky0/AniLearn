@@ -1,4 +1,5 @@
 // Shared types used by both server and client code.
+import type { ReaderAnchor, ReaderPosition } from "./book-types";
 
 export type ProviderId = "openai" | "anthropic" | "xai" | "gemini";
 export type ConnectionProtocol = ProviderId | "openai-compatible";
@@ -331,6 +332,7 @@ export type AnalysisEvent =
   | { type: "done"; paper: PaperDTO }
   | { type: "error"; error: string };
 
+export * from "./book-types";
 export type ReadingLanguage = "en" | "ja";
 export interface ReadingParagraph { id: string; text: string; page: number }
 export interface ReadingDTO {
@@ -363,6 +365,7 @@ export interface ReadingMessage {
   phase?: ReadingPhase | "legacy";
   focus?: ReadingFocus | null;
   selection?: ReadingSelection | null;
+  readerAnchor?: ReaderAnchor | null;
 }
 export type ReadingPhase = "free_reading" | "article_analysis";
 export type ReadingFocus = "structure" | "writing" | "theme" | "emotion" | "technique";
@@ -396,6 +399,7 @@ export interface ReadingPersonalNote {
   kind: "document" | "annotation";
   content: string;
   selection: ReadingSelection | null;
+  readerAnchor?: ReaderAnchor | null;
   revision: number;
   updatedAt: string;
 }
@@ -417,6 +421,7 @@ export interface ReadingTurnRequest {
   focus?: ReadingFocus | null;
   selection?: ReadingSelection | null;
   selectionTask?: ReadingSelectionTask;
+  readerAnchor?: ReaderAnchor | null;
   text?: string;
   images?: string[];
   intent?: "continue" | "goodbye" | "analysis_summary";
@@ -427,6 +432,7 @@ export interface ReadingSessionDTO {
   status: string; progress: Record<string, ProblemProgress>;
   notes: Record<string, string[]>; updatedAt: string;
   learning: ReadingLearningState;
+  readerPosition?: ReaderPosition | null;
 }
 export type FreeMessageKind = "text" | "board" | "quote" | "example" | "exercise" | "feedback";
 export type FreeTurnIntent = "greeting" | "continue" | "goodbye";

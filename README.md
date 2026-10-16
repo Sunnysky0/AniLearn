@@ -6,7 +6,7 @@ AI 一对一学习平台，提供试卷学习、英语／日语外刊导读、�
 
 ### TUI 启动器
 
-双击项目根目录的 `AniLearn.cmd`，或在 Windows Terminal 中运行 `npm run launcher`。需要 Node.js 22 或更新版本及已安装的 Docker Desktop；缺少 npm 依赖时会自动安装。启动器自动开启 Docker 的 Linux 引擎、本项目 PostgreSQL 和 AniLearn，默认使用生产模式，保留上次选择的模式与端口。网页就绪后按 `O` 打开。
+双击项目根目录的 `AniLearn.cmd`，或在 Windows Terminal 中运行 `npm run launcher`。需要 Node.js 22 或更新版本及已安装的 Docker Desktop；启动器会核对全部直接依赖与锁定版本，缺包或版本不符时运行 `npm ci --include=dev`，安装失败则停止启动。启动器自动开启 Docker 的 Linux 引擎、本项目 PostgreSQL 和 AniLearn，默认使用生产模式，保留上次选择的模式与端口。网页就绪后按 `O` 打开。
 
 面板显示应用、数据库与 Docker 状态、按来源筛选的实时日志、CPU/内存曲线、数据库容器收发流量，以及只读的数据库大小、连接数和业务数量统计。不会读取消息正文、试卷内容或 API 密钥。终端变窄后按 `Tab` 切换日志、资源和统计；大窗口同时显示全部面板。
 
@@ -34,7 +34,7 @@ npm run launcher -- --no-autostart
 ### 手动启动
 
 1. 启动 Docker Desktop，使用 Linux 容器。
-2. 安装依赖：`npm install`。
+2. 按锁文件安装依赖：`npm ci --include=dev`。
 3. 首次配置时，复制环境变量模板：
 
    ```powershell
@@ -118,12 +118,18 @@ npm run launcher -- --no-autostart
 
 ## 生产构建
 
+已有工作区更新源码后，先停止该目录的应用和构建进程，再按锁文件同步依赖。Git 更新和 `npm run build` 都不会自动安装新增依赖；其他副本的验收通过也不代表本工作区已完成升级。
+
 ```powershell
+npm ci --include=dev
+npm ls --depth=0
 npm run typecheck
 npm run lint
 npm run build
 npm run start
 ```
+
+同步依赖后运行本次改动涉及的回归检查；典籍与共享阅读器使用 `npm run books:test`、`npm run reading:test` 和 `npm run math:test`。数据库结构升级按对应增量迁移单独审查、备份和执行，在启动新版前完成。
 
 Next.js 在构建收集路由时会加载数据库模块，因此构建环境也必须提供 `DATABASE_URL`。本机使用项目根目录的 `.env.local`；远程构建和部署环境应分别配置指向相应数据库的 `DATABASE_URL`。`drizzle.config.ts` 也读取 Next.js 环境文件，应用和建表工具共享连接配置。
 

@@ -434,6 +434,14 @@ export interface ReadingSessionDTO {
   learning: ReadingLearningState;
   readerPosition?: ReaderPosition | null;
 }
+export interface ReadingReaderStateDTO {
+  documentKey: string; position: ReaderPosition | null; revision: number;
+  mutationId: string | null; updatedAt: string | null;
+}
+export type ReadingBookmarkDTO = import("./book-types").ReaderBookmark;
+export interface ReadingPositionMutation {
+  position: ReaderPosition; revision: number; mutationId: string;
+}
 export type FreeMessageKind = "text" | "board" | "quote" | "example" | "exercise" | "feedback";
 export type FreeTurnIntent = "greeting" | "continue" | "goodbye";
 export type FreeTurnAction = "wait" | "continue";

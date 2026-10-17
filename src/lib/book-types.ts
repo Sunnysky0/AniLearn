@@ -43,9 +43,20 @@ export interface ReaderAnchor { version: 2; documentKey: string; unitId: string;
 export interface ReaderPosition { documentKey: string; unitId: string; blockId: string; offset: number; viewportOffset: number }
 export type ReaderSelectionTask = "vocabulary" | "grammar" | "meaning";
 export interface ReaderAnnotation { id: number | string; anchor: ReaderAnchor; content: string }
+export interface ReaderBookmark {
+  id: number; clientId: string; position: ReaderPosition; title: string; excerpt: string;
+  revision: number; updatedAt: string;
+}
 export interface ReaderProps {
   document: ReaderDocument;
+  layout?: "scroll" | "paged";
   initialPosition?: ReaderPosition | null;
+  entryPosition?: ReaderPosition | null;
+  bookmarks?: ReaderBookmark[];
+  onBookmarkCreate?: (position: ReaderPosition) => Promise<void>;
+  onBookmarkRename?: (bookmark: ReaderBookmark, title: string) => Promise<void>;
+  onBookmarkDelete?: (bookmark: ReaderBookmark) => Promise<void>;
+  status?: React.ReactNode;
   inspectAnchor?: ReaderAnchor | null;
   annotations?: ReaderAnnotation[];
   onPositionChange?: (position: ReaderPosition) => void;

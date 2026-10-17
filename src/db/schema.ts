@@ -188,6 +188,27 @@ export const readingSessions = pgTable("reading_sessions", {
   readerPosition: jsonb("reader_position").$type<ReaderPosition>(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+export const readingReaderStates = pgTable("reading_reader_states", {
+  id: serial("id").primaryKey(),
+  readingId: integer("reading_id").notNull().references(() => readings.id, { onDelete: "cascade" }),
+  documentKey: text("document_key").notNull(),
+  position: jsonb("position").$type<ReaderPosition>().notNull(),
+  revision: integer("revision").notNull().default(1),
+  mutationId: text("mutation_id").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("reading_reader_states_document_uq").on(t.readingId, t.documentKey)]);
+export const readingBookmarks = pgTable("reading_bookmarks", {
+  id: serial("id").primaryKey(),
+  readingId: integer("reading_id").notNull().references(() => readings.id, { onDelete: "cascade" }),
+  documentKey: text("document_key").notNull(),
+  clientId: text("client_id").notNull(),
+  position: jsonb("position").$type<ReaderPosition>().notNull(),
+  title: text("title").notNull(),
+  excerpt: text("excerpt").notNull(),
+  revision: integer("revision").notNull().default(1),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("reading_bookmarks_client_uq").on(t.readingId, t.documentKey, t.clientId)]);
 export const readingTurns = pgTable("reading_turns", {
   id: serial("id").primaryKey(),
   sessionId: integer("session_id").notNull().references(() => readingSessions.id, { onDelete: "cascade" }),

@@ -7,14 +7,15 @@ import { BookOpen, NotebookPen, MessageSquare, Volume2, VolumeX, LogOut, Play, C
 import { ClassroomComposer } from "@/components/ClassroomComposer";
 import Reader from "@/components/reader/Reader";
 import ReadingWorkspace from "@/components/reader/ReadingWorkspace";
-import { readingDocument, readingInitialPosition, readerAnchorToSelection, readingSelectionToAnchor } from "@/lib/reader/reading-adapter";
-import type { ReaderAnchor, ReaderPosition } from "@/lib/book-types";
+import { readingDocument, readerAnchorToSelection, readingSelectionToAnchor } from "@/lib/reader/reading-adapter";
+import type { ReaderAnchor } from "@/lib/book-types";
+import { useReadingBookmarks, useReadingProgress } from "@/lib/client/use-reading-progress";
 import { Markdown } from "@/components/Markdown";
 import { revealTutorMessage } from "@/lib/client/tutor-playback";
 import { useChatAttachments } from "@/lib/client/chat-attachments";
 import { useSpeechAudioController } from "@/lib/client/speech-audio";
 import { tokenizeForReveal } from "@/lib/text";
-import type { ReadingSessionDTO } from "@/lib/types";
+import type { ReadingBookmarkDTO, ReadingReaderStateDTO, ReadingSessionDTO } from "@/lib/types";
 import { MAX_CHAT_TEXT_CHARS, type ReadingDTO, type ReadingFocus, type ReadingLearningState, type ReadingMessage, type ReadingPersonalNote, type ReadingPhase, type ReadingSelection, type ReadingSelectionTask, type ReadingTurnEvent, type ReadingTurnRequest, type TutorDTO } from "@/lib/types";
 
 type TurnRequest = Omit<ReadingTurnRequest, "requestId" | "phase" | "stateRevision" | "paragraphIdx"> & {
@@ -36,6 +37,8 @@ export default function ReadingClassroom(props: {
   tutor: TutorDTO;
   initialMessages: ReadingMessage[];
   initialPersonalNotes: ReadingPersonalNote[];
+  initialReaderState: ReadingReaderStateDTO;
+  initialBookmarks: ReadingBookmarkDTO[];
   ttsReady: boolean;
   llmReady: boolean;
   analysisReady: boolean;
@@ -60,10 +63,11 @@ export default function ReadingClassroom(props: {
   const [tutorOpen, setTutorOpen] = useState(false);
   const [inspectAnchor, setInspectAnchor] = useState<ReaderAnchor | null>(null);
   const readerDocument = useMemo(() => readingDocument(reading), [reading]);
-  const [readerPosition, setReaderPosition] = useState(() => readingInitialPosition(readerDocument, props.session.readerPosition, props.session.currentIdx));
-  const readerPositionRef = useRef(readerPosition);
-  const bookmarkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [viewIdx, setViewIdx] = useState(props.session.currentIdx);
+  const readingProgress = useReadingProgress(readerDocument, props.session.id, props.initialReaderState);
+  const savedBookmarks = useReadingBookmarks(props.session.id, props.initialBookmarks);
+  const readerPosition = readingProgress.position;
+  const positionIdx = readerDocument.blocks.findIndex(block => block.id === readerPosition?.blockId);
+  const viewIdx = positionIdx >= 0 ? positionIdx : props.session.currentIdx;
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -97,7 +101,6 @@ export default function ReadingClassroom(props: {
   const chatEnd = useRef<HTMLDivElement>(null);
   const docTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const annotationTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
-  const saveBookmarkRef = useRef<(position: ReaderPosition, attempt?: number) => Promise<void>>(async () => undefined);
 
   const saveDocument = useCallback(async (content: string) => {
     docPending.current = content;
@@ -154,31 +157,6 @@ export default function ReadingClassroom(props: {
     return queued;
   }, [replaceNotes]);
 
-  const saveBookmark = useCallback(async (position: ReaderPosition, attempt = 0) => {
-    const idx = readerDocument.blocks.findIndex((block) => block.id === position.blockId);
-    if (idx < 0) return;
-    try {
-      const response = await fetch(`/api/reading-sessions/${sessionRef.current.id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "bookmark", currentIdx: idx, readerPosition: position }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        if (response.status === 409 && attempt < 3) setTimeout(() => { if (readerPositionRef.current === position && !disposed.current) void saveBookmarkRef.current(position, attempt + 1); }, 400);
-        return;
-      }
-      if (readerPositionRef.current === position) replaceSession({ ...sessionRef.current, currentIdx: data.currentIdx, readerPosition: data.readerPosition });
-    } catch { /* A later position change retries saving the latest bookmark. */ }
-  }, [readerDocument, replaceSession]);
-  useEffect(() => { saveBookmarkRef.current = saveBookmark; }, [saveBookmark]);
-  function onReaderPosition(position: ReaderPosition) {
-    readerPositionRef.current = position;
-    setReaderPosition(position);
-    const index = readerDocument.blocks.findIndex((block) => block.id === position.blockId);
-    if (index >= 0) setViewIdx(index);
-    if (bookmarkTimer.current) clearTimeout(bookmarkTimer.current);
-    bookmarkTimer.current = setTimeout(() => void saveBookmarkRef.current(position), 350);
-  }
-
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { notesRef.current = personalNotes; }, [personalNotes]);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
@@ -214,7 +192,6 @@ export default function ReadingClassroom(props: {
       request.current?.abort(); playback.current?.abort();
       getSpeechAudio().cancelPending(); speechAudioRef.current?.dispose(); speechAudioRef.current = null;
       if (docTimer.current) clearTimeout(docTimer.current);
-      if (bookmarkTimer.current) clearTimeout(bookmarkTimer.current);
       for (const timer of annotationTimerMap.values()) clearTimeout(timer);
     };
   }, [getSpeechAudio, speechAudioRef]);
@@ -429,7 +406,7 @@ export default function ReadingClassroom(props: {
     }
     await Promise.all(personalNotes.filter((note) => note.kind === "annotation" && annotationDrafts[note.id] !== note.content).map((note) => saveAnnotation(note.id, annotationDrafts[note.id] ?? note.content)));
     if (personalNotes.some((note) => note.kind === "annotation" && (notesRef.current.find((item) => item.id === note.id)?.content !== (annotationDrafts[note.id] ?? note.content)))) return;
-    if (readerPositionRef.current) await saveBookmark(readerPositionRef.current);
+    await readingProgress.flush();
     window.location.assign(destination);
   }
 
@@ -464,7 +441,6 @@ export default function ReadingClassroom(props: {
     setInspectAnchor(anchor); setTab("source"); setTutorOpen(false);
   }
 
-  const paragraphs = reading.paragraphs;
   const learning = session.learning;
   const requiredFoci = learning.articleKind === "literary" ? FOCI : FOCI.slice(0, 3);
   const currentFocusMeta = FOCI.find((focus) => focus.id === learning.currentFocus);
@@ -514,39 +490,42 @@ export default function ReadingClassroom(props: {
     <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b-2 border-neutral-900 px-4 py-2">
       <span className="hidden font-serif font-bold sm:inline">AniLearn</span>
       <span className="w-full min-w-0 truncate text-sm font-semibold sm:w-auto sm:flex-1">{reading.title}</span>
+      <button className="flex items-center gap-2 border px-3 py-1.5 text-xs" aria-label={tutorOpen ? "收起导师" : "打开导师"} aria-expanded={tutorOpen} aria-controls="reading-tutor-panel" onClick={() => setTutorOpen(!tutorOpen)}><MessageSquare className="h-4 w-4" />{tutorOpen ? "收起导师" : "导师"}</button>
       <button className="flex items-center gap-2 border px-3 py-1.5 text-xs" onClick={() => void leaveReading()}><LogOut className="h-4 w-4" />返回文章</button>
       <button className="p-2" title={muted ? "开启语音" : "静音"} aria-label={muted ? "开启语音" : "静音"} onClick={() => { if (!muted) playback.current?.abort(); setMuted(!muted); }}>{muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}</button>
       <select aria-label="语速" value={rate} onChange={(event) => setRate(Number(event.target.value))} className="bg-transparent text-sm"><option value={1}>1x</option><option value={1.25}>1.25x</option><option value={1.5}>1.5x</option></select>
       <Link href="/readings" className="flex items-center gap-2 text-sm" onNavigate={(event) => { event.preventDefault(); void leaveReading("/readings"); }}><LogOut className="h-4 w-4" />退出阅读</Link>
     </header>
-    <ReadingWorkspace open={tutorOpen} onOpenChange={setTutorOpen} tutor={tutorPanel}>
+    <ReadingWorkspace open={tutorOpen} onOpenChange={setTutorOpen} tutor={tutorPanel} showToggle={false}>
       <section className="flex min-h-0 flex-1 flex-col">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-neutral-300 px-4 py-3">
           <div role="tablist" aria-label="阅读内容" className="flex gap-1">
-            {([{ id: "source", label: "原文", icon: BookOpen }, { id: "notes", label: "我的笔记", icon: NotebookPen }, { id: "analysis", label: "文章分析", icon: MessageSquare }] as const).map((item) => <button key={item.id} role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)} className={`flex items-center gap-2 px-3 py-2 text-sm ${tab === item.id ? "bg-neutral-900 text-white" : ""}`}><item.icon className="h-4 w-4" />{item.label}</button>)}
+            {([{ id: "source", label: "原文", icon: BookOpen }, { id: "notes", label: "我的笔记", icon: NotebookPen }, { id: "analysis", label: "文章分析", icon: MessageSquare }] as const).map((item) => <button key={item.id} role="tab" aria-selected={tab === item.id} onClick={() => { void readingProgress.flush(); setTab(item.id); }} className={`flex items-center gap-2 px-3 py-2 text-sm ${tab === item.id ? "bg-neutral-900 text-white" : ""}`}><item.icon className="h-4 w-4" />{item.label}</button>)}
           </div>
           <div className="ml-auto flex items-center gap-2 text-xs">
-            <button aria-pressed={learning.phase === "free_reading"} disabled={analysisBusy || busy || learning.phase === "free_reading"} onClick={() => void changeLearning("return_to_reading")} className={`border px-3 py-2 ${learning.phase === "free_reading" ? "bg-neutral-900 text-white" : ""}`}>自由阅读</button>
-            <button aria-pressed={learning.phase === "article_analysis"} disabled={learning.phase !== "article_analysis" || analysisBusy || busy} onClick={() => setTab("analysis")} className={`border px-3 py-2 ${learning.phase === "article_analysis" ? "bg-neutral-900 text-white" : ""}`}>文章分析</button>
+            {learning.phase === "free_reading" && <button disabled={analysisBusy || busy || !props.analysisReady} onClick={() => void startAnalysis()} className="border border-neutral-900 px-3 py-2 disabled:opacity-40">读完，开始分析</button>}
+            {learning.phase === "article_analysis" && <button disabled={analysisBusy || busy} onClick={() => { void changeLearning("return_to_reading").then(changed => { if (changed) setTab("source"); }); }} className="border px-3 py-2 disabled:opacity-40">回到自由阅读</button>}
           </div>
         </div>
         <div className={`min-h-0 flex-1 ${tab === "source" ? "flex flex-col" : "overflow-y-auto px-5 py-6 sm:px-8"}`}>
           {tab === "source" && <>
-            {learning.phase === "free_reading" && <div className="mx-auto mb-5 flex max-w-3xl flex-wrap items-center justify-between gap-3 border-b border-neutral-200 pb-4"><p className="text-sm text-neutral-600">自由阅读 · 已读到第 {viewIdx + 1}/{paragraphs.length} 段</p><button disabled={busy || analysisBusy || !props.analysisReady} onClick={() => void startAnalysis()} className="ink-button px-4 py-2 disabled:opacity-40"><Play className="h-4 w-4" />已读完整篇，开始分析</button></div>}
             {learning.phase === "article_analysis" && analysisStatus.status !== "ready" && <div className="mx-auto mb-5 max-w-3xl border border-neutral-300 bg-white p-4" role="status">
               <p className="font-medium">{analysisStatus.running ? "导师正在准备整篇文章分析" : "整篇分析资料尚未就绪"}</p>
               {analysisStatus.totalChunks > 0 && <p className="mt-1 text-sm text-neutral-500">已整理 {analysisStatus.completedChunks}/{analysisStatus.totalChunks} 个文章片段</p>}
               {analysisStatus.error && <p className="mt-2 text-sm text-red-700">{analysisStatus.error}</p>}
               {analysisStatus.resumable && <button disabled={analysisBusy} className="mt-3 border px-3 py-2 text-sm" onClick={() => void resumeAnalysis()}><RotateCcw className="mr-2 inline h-4 w-4" />续接全文分析</button>}
             </div>}
-            <Reader document={readerDocument}
-              initialPosition={readerPosition} inspectAnchor={inspectAnchor}
+            {readingProgress.ready ? <Reader document={readerDocument} layout="paged"
+              initialPosition={readerPosition} entryPosition={readingProgress.entryPosition} inspectAnchor={inspectAnchor}
+              onInspectionChange={inspecting => { if (!inspecting) setInspectAnchor(null); }}
+              bookmarks={savedBookmarks.bookmarks} onBookmarkCreate={savedBookmarks.create} onBookmarkRename={savedBookmarks.rename} onBookmarkDelete={savedBookmarks.remove}
+              status={<span role="status" title={readingProgress.error}>{readingProgress.status === "saved" ? "位置已保存" : readingProgress.status === "saving" ? "位置保存中…" : readingProgress.status === "conflict" ? "其他窗口已更新 · 本地位置保留" : "位置保存失败 · 本地位置保留"}{(readingProgress.status === "failed" || readingProgress.status === "conflict") && <button onClick={() => void readingProgress.retry()}>{readingProgress.status === "conflict" ? "保存当前位置" : "重试"}</button>}</span>}
               annotations={personalNotes.filter((note) => note.kind === "annotation").flatMap((note) => {
                 const anchor = note.readerAnchor ?? readingSelectionToAnchor(readerDocument, note.selection);
                 return anchor ? [{ id: note.id, anchor, content: annotationDrafts[note.id] ?? note.content }] : [];
               })}
-              onPositionChange={onReaderPosition} onSelectionTask={readerSelectionTask} onQuestion={readerQuestion}
-              onAnnotation={createReaderAnnotation} />
+              onPositionChange={readingProgress.update} onSelectionTask={readerSelectionTask} onQuestion={readerQuestion}
+              onAnnotation={createReaderAnnotation} /> : <p role="status" className="p-6 text-sm text-neutral-500">正在恢复阅读位置…</p>}
           </>}
 
           {tab === "notes" && <div className="mx-auto max-w-3xl space-y-5">

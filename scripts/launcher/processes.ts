@@ -44,9 +44,13 @@ export function belongsToProject(p: ProcessIdentity, root: string) {
     || (wrapperIndex >= 0 && /[\s"']|^$/.test(command[wrapperIndex + wrapper.length] ?? ''));
   return index >= 0 && /[\\\s"']|^$/.test(command[index + project.length] ?? '') && executable;
 }
-export async function terminateTree(identity: ProcessIdentity) {
+export function isDockerCli(identity: ProcessIdentity) {
+  const executable = identity.command.match(/^\s*(?:"([^"]+)"|(\S+))/);
+  return /^(?:docker|docker-compose|docker-desktop)(?:\.exe)?$/i.test(path.win32.basename(executable?.[1] ?? executable?.[2] ?? ''));
+}
+export async function terminateTree(identity: ProcessIdentity, include: (process: ProcessIdentity) => boolean = () => true) {
   const all = await processes();
-  const selected = descendants(all, identity).reverse();
+  const selected = descendants(all, identity).reverse().filter(include);
   for (const p of selected) {
     const current = (await processes()).find(row => sameProcess(row, p));
     if (!current) continue;

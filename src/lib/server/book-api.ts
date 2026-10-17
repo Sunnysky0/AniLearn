@@ -1,7 +1,9 @@
 import { BookImportError, bookErrorMessage } from "./book-import";
 import { validBookId } from "./book-catalog";
+import { SchemaNotReadyError } from "./schema-readiness";
 
 export function bookApiError(error: unknown, fallbackStatus = 500) {
+  if (error instanceof SchemaNotReadyError) return Response.json({ error: "数据库需要升级，请先完成数据库升级后重试。", code: error.code }, { status: 503 });
   return Response.json({ error: bookErrorMessage(error) }, { status: error instanceof BookImportError ? error.status : fallbackStatus });
 }
 export function bookRouteIds(params: { id: string; versionId?: string }) {

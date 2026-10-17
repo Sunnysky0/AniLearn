@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, getTableColumns, sql } from "drizzle-orm";
-import { db } from "@/db";
+import { db, pool } from "@/db";
+import { assertSchemaReady } from "./schema-readiness";
 import { bookAssets, bookChapters, books, bookVersions } from "@/db/books-schema";
 import type { BookDTO, BookImportDraft, BookKind, BookLanguage, BookMaterialDTO, BookStatus, BookVersionDTO, ReaderDocument, ReaderUnit } from "@/lib/types";
 import { tryOperationLock } from "./locks";
@@ -42,6 +43,7 @@ export async function ensureBuiltinBooks() {
 }
 
 export async function listBooks(): Promise<BookDTO[]> {
+  await assertSchemaReady(pool);
   await ensureBuiltinBooks();
   const rows = await db.select().from(books).orderBy(desc(books.createdAt), desc(books.id));
   const output: BookDTO[] = [];

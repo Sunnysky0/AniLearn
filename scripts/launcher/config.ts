@@ -57,7 +57,8 @@ export function makeRedactor(env: NodeJS.ProcessEnv) {
   return (input: string) => {
     let text = input.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
     for (const secret of secrets) text = text.split(secret).join('[已隐藏]');
-    return text.replace(/(?:postgres(?:ql)?|https?):\/\/[^\s/@]+:[^\s/@]+@/gi, '[凭据已隐藏]@')
+    return text.replace(/(?:Failed query:|^\s*(?:query|params|parameters|internalQuery)\s*:)[\s\S]*/im, '[数据库查询与参数已隐藏]')
+      .replace(/(?:postgres(?:ql)?|https?):\/\/[^\s/@]+:[^\s/@]+@/gi, '[凭据已隐藏]@')
       .replace(/(?:sk-|xai-|ghp_|github_pat_)[\w-]{16,}/g, '[密钥已隐藏]')
       .replace(/AIza[\w-]{30,}/g, '[密钥已隐藏]')
       .replace(/(?:Bearer\s+|(?:api[_-]?key|password|token)["'\s:=]+)[\w./+=-]{8,}/gi, '[凭据已隐藏]')
@@ -65,6 +66,31 @@ export function makeRedactor(env: NodeJS.ProcessEnv) {
       .replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g, '[上传内容已隐藏]')
       .replace(/[A-Za-z0-9+/]{256,}={0,2}/g, '[长载荷已隐藏]')
       .slice(0, 2000);
+  };
+}
+export function logLevel(text: string): 'info' | 'error' {
+  return /error|fail|fatal|exception|timeout|timed out|错误|失败|异常|超时|未完成/i.test(text) ? 'error' : 'info';
+}
+export function createApplicationLogFilter(suppress = false) {
+  return (input: string) => {
+    const line = input.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    if (/^(?:数据库查询失败，SQL 和参数已隐藏。|数据库错误码 [A-Z0-9]{5}|应用错误标识 [0-9]{1,30})\s*$/.test(line)) return line;
+    if (/DrizzleQueryError|Failed query:|^\s*(?:query|params|parameters|internalQuery)\s*:/i.test(line)) {
+      const first = !suppress; suppress = true;
+      return first ? '数据库查询失败，SQL 和参数已隐藏。' : '';
+    }
+    if (!suppress) return line;
+    const code = line.match(/^\s*code:\s*['"]([A-Z0-9]{5})['"],?\s*$/);
+    if (code) return `数据库错误码 ${code[1]}`;
+    const digest = line.match(/^\s*digest:\s*['"]([0-9]{1,30})['"],?\s*$/);
+    if (digest) return `应用错误标识 ${digest[1]}`;
+    // Node's ORM error object closes at column zero; indented closers can be
+    // part of nested parameters. Suppress the whole payload, across chunks.
+    if (/^}\s*[,;]?\s*$/.test(line)) { suppress = false; return ''; }
+    if (/^(?:[✓○▲]|(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \/|[-] (?:Local|Network|Environments):|(?:⨯\s*)?(?:[A-Za-z]*Error|error):)/u.test(line)) {
+      suppress = false; return line;
+    }
+    return '';
   };
 }
 export function databaseLog(input: string) {

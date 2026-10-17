@@ -5,9 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { Pool } from 'pg';
-import { databaseLog, fingerprint, loadEnvironment, makeRedactor, readJson, saveJson } from './config';
-import { belongsToProject, descendants, matchesRecord, portAvailable, portOwner, processes, recordProcess, sameProcess, terminateTree, type ProcessRecord } from './processes';
+import { createApplicationLogFilter, databaseLog, fingerprint, loadEnvironment, logLevel, makeRedactor, readJson, saveJson } from './config';
+import { belongsToProject, descendants, isDockerCli, matchesRecord, portAvailable, portOwner, processes, recordProcess, sameProcess, terminateTree, type ProcessRecord } from './processes';
 import { ensureDocker } from './docker';
+import { assertSchemaReady } from '../../src/lib/server/schema-readiness';
 import type { Command, Config, DatabaseStats, LogSource, ProcessIdentity, Sample, Snapshot } from './types';
 
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -61,11 +62,11 @@ export class Manager extends EventEmitter {
   changed(force = false) {
     if (force || Date.now() - this.lastBroadcast > 400) { this.lastBroadcast = Date.now(); this.emit('snapshot', this.snapshot); }
   }
-  log(source: LogSource, text: string) {
+  log(source: LogSource, text: string, level?: 'info' | 'error') {
     for (const line of text.split(/\r?\n/).filter(Boolean)) {
       const safe = this.redact(source === 'database' ? databaseLog(line) : line);
       if (!safe.trim()) continue;
-      const entry = { id: ++this.logId, time: Date.now(), source, level: /error|fail|fatal|exception|错误|失败/i.test(safe) ? 'error' as const : 'info' as const, text: safe };
+      const entry = { id: ++this.logId, time: Date.now(), source, level: level ?? logLevel(safe), text: safe };
       this.snapshot.logs.push(entry);
       if (this.snapshot.logs.length > 1000) this.snapshot.logs.shift();
       const file = path.join(this.config.runtime, 'activity.log');
@@ -84,23 +85,37 @@ export class Manager extends EventEmitter {
   private compose(args: string[]) { return ['compose', '-p', this.config.project, '--env-file', this.config.envFile, '-f', this.config.composeFile, ...args]; }
   private logStream(stream: NodeJS.ReadableStream, source: LogSource) {
     let buffer = '';
+    const filter = source === 'app' ? createApplicationLogFilter() : (line: string) => line;
     stream.setEncoding('utf8');
     stream.on('data', (text: string) => {
       buffer += text;
       let index;
-      while ((index = buffer.indexOf('\n')) >= 0) { this.log(source, buffer.slice(0, index)); buffer = buffer.slice(index + 1); }
-      if (buffer.length > 100_000) { this.log(source, this.redact(buffer)); buffer = ''; }
+      while ((index = buffer.indexOf('\n')) >= 0) { this.log(source, filter(buffer.slice(0, index))); buffer = buffer.slice(index + 1); }
+      if (buffer.length > 100_000) { this.log(source, filter(buffer)); buffer = ''; }
     });
-    stream.on('end', () => { if (buffer) this.log(source, buffer); });
+    stream.on('end', () => { if (buffer) this.log(source, filter(buffer)); });
   }
   private run(executable: string, args: string[], timeout = 30_000, signal?: AbortSignal, source: LogSource = 'launcher', quiet = false): Promise<string> {
     return new Promise((resolve, reject) => {
       const launchedAt = Date.now();
+      const docker = /^docker(?:\.exe)?$/i.test(path.basename(executable));
+      const operation = docker ? ['docker', ...args.slice(0, args[0] === 'desktop' ? 2 : 1)].join(' ') : path.basename(executable);
+      const phase = this.snapshot.phase;
+      const context = () => `命令 ${operation}；阶段 ${phase}；耗时 ${((Date.now() - launchedAt) / 1000).toFixed(1)} 秒`;
       const child = spawn(executable, args, { cwd: this.config.root, env: this.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-      let output = '', errors = '';
+      let output = '', errors = '', errorBuffer = '';
+      const filterError = createApplicationLogFilter();
+      const appendError = (line: string) => {
+        const safe = this.redact(filterError(line));
+        if (safe) errors = (errors + safe + '\n').slice(-32_000);
+      };
       const capture = (chunk: Buffer, stderr: boolean) => {
-        const safe = this.redact(chunk.toString());
-        if (stderr) errors = (errors + safe).slice(-32_000); else output = (output + chunk.toString()).slice(-2_000_000);
+        if (stderr) {
+          errorBuffer += chunk.toString();
+          let index;
+          while ((index = errorBuffer.indexOf('\n')) >= 0) { appendError(errorBuffer.slice(0, index)); errorBuffer = errorBuffer.slice(index + 1); }
+          if (errorBuffer.length > 100_000) { appendError(errorBuffer); errorBuffer = ''; }
+        } else output = (output + chunk.toString()).slice(-2_000_000);
       };
       child.stdout.on('data', chunk => capture(chunk, false)); child.stderr.on('data', chunk => capture(chunk, true));
       if (!quiet) { this.logStream(child.stdout, source); this.logStream(child.stderr, source); }
@@ -110,18 +125,19 @@ export class Manager extends EventEmitter {
         if (child.pid) void processes().then(all => {
           if (child.exitCode !== null || child.signalCode) return;
           const p = all.find(p => p.pid === child.pid && p.parentPid === process.pid && Date.parse(p.created) >= launchedAt);
-          if (p) return terminateTree(p);
+          if (p) return terminateTree(p, docker ? isDockerCli : undefined);
         }).catch(() => {}).finally(() => { if (child.exitCode === null && !child.signalCode) child.kill(); });
       };
       const timer = setTimeout(() => { timedOut = true; cancel(); }, timeout);
       signal?.addEventListener('abort', cancel, { once: true });
       if (signal?.aborted) cancel();
-      child.once('error', error => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); reject(error); });
+      child.once('error', error => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); error.message = this.redact(`${error.message}（${context()}）。`); reject(error); });
       child.once('close', code => {
         clearTimeout(timer); signal?.removeEventListener('abort', cancel);
-        if (signal?.aborted) reject(new Error('操作已取消。'));
-        else if (timedOut) reject(new Error(`${path.basename(executable)} 执行超时。`));
-        else if (code !== 0) reject(new Error(errors.trim() || `${path.basename(executable)} 执行失败（${code ?? '超时'}）。`));
+        if (errorBuffer) appendError(errorBuffer);
+        if (signal?.aborted) reject(new Error(`操作已取消（${context()}）。`));
+        else if (timedOut) reject(new Error(`命令执行超时（${context()}）。`));
+        else if (code !== 0) reject(new Error(`命令执行失败（${context()}；退出码 ${code ?? '未知'}）。${errors.trim()}`));
         else resolve(output.trim());
       });
     });
@@ -131,7 +147,8 @@ export class Manager extends EventEmitter {
     const file = path.join(this.config.runtime, 'activity.log');
     if (fs.existsSync(file)) {
       const recent = fs.readFileSync(file, 'utf8').slice(-500_000).split('\n').slice(-301);
-      for (const line of recent) { try { const entry = JSON.parse(line); const text = this.redact(entry.source === 'database' ? databaseLog(entry.text) : entry.text); if (text) this.snapshot.logs.push({ ...entry, id: ++this.logId, text }); } catch { /* Ignore an incomplete log tail. */ } }
+      const filter = createApplicationLogFilter(true);
+      for (const line of recent) { try { const entry = JSON.parse(line); const text = this.redact(entry.source === 'database' ? databaseLog(entry.text) : entry.source === 'app' ? filter(entry.text) : entry.text); if (text) this.snapshot.logs.push({ ...entry, id: ++this.logId, text, level: entry.level === 'error' ? 'error' : logLevel(text) }); } catch { /* Ignore an incomplete log tail. */ } }
     }
     await this.detect();
     this.snapshot.phase = '就绪';
@@ -178,7 +195,7 @@ export class Manager extends EventEmitter {
       this.logProcess = child;
       if (child.stdout) this.logStream(child.stdout, 'database');
       if (child.stderr) this.logStream(child.stderr, 'database');
-      child.on('error', error => this.log('launcher', String(error)));
+      child.on('error', error => this.log('launcher', String(error), 'error'));
       child.on('close', () => { if (this.logProcess === child) this.logProcess = null; });
     }
     if (!this.closed && this.snapshot.database === 'running' && !this.resourceProcess) {
@@ -214,14 +231,12 @@ export class Manager extends EventEmitter {
   private databasePool() {
     if (!this.pool) {
       this.pool = new Pool({ connectionString: this.env.DATABASE_URL, max: 1, connectionTimeoutMillis: 2000, idleTimeoutMillis: 5000, statement_timeout: 2000, options: '-c default_transaction_read_only=on', application_name: 'anilearn_launcher' });
-      this.pool.on('error', error => this.log('launcher', `数据库监控连接：${error.message}`));
+      this.pool.on('error', error => this.log('launcher', `数据库监控连接：${error.message}`, 'error'));
     }
     return this.pool;
   }
   private async validateSchema() {
-    const required: Record<string, string[]> = { papers: ['analysis_draft', 'inventory', 'analysis_plan', 'pace', 'learning_request', 'revision'], sessions: ['snapshot', 'coverage', 'plan', 'plan_revision', 'pending_plan', 'supplement_draft'], tutors: [], messages: [], boards: [], problems: [], paper_pages: [], app_settings: [], readings: ['paragraphs', 'revision'], reading_sources: [], reading_sessions: ['snapshot', 'notes'], reading_messages: [] };
-    const result = await this.databasePool().query<{ table_name: string; column_name: string }>("SELECT table_name, column_name FROM information_schema.columns WHERE table_schema='public'");
-    for (const [table, columns] of Object.entries(required)) if (!result.rows.some(r => r.table_name === table) || columns.some(column => !result.rows.some(r => r.table_name === table && r.column_name === column))) throw new Error('数据库表结构尚未就绪。请审查并运行 npm run db:push 后重试；启动器不会修改表结构。');
+    await assertSchemaReady(this.databasePool());
   }
   async command(command: Command) {
     if (command === 'shutdown' || command === 'stop') { this.cancelVersion++; this.controller?.abort(); }
@@ -251,7 +266,7 @@ export class Manager extends EventEmitter {
           this.snapshot.app = 'error';
         }
         this.snapshot.error = failure;
-        this.phase('操作未完成'); this.log('launcher', this.snapshot.error);
+        this.phase('操作未完成'); this.log('launcher', this.snapshot.error, 'error');
         if (this.snapshot.app === 'starting') this.snapshot.app = 'error';
         if (command === 'shutdown') this.emit('shutdown-error');
       } finally { this.snapshot.busy = false; this.controller = null; this.changed(true); }
@@ -265,7 +280,7 @@ export class Manager extends EventEmitter {
     if (previousUrl !== this.env.DATABASE_URL && this.pool) { await this.pool.end(); this.pool = null; }
     this.validateConfig();
     this.phase('检查 Docker 引擎');
-    await ensureDocker((args, timeout, signal) => this.run('docker', args, timeout, signal, 'launcher', true), text => { this.snapshot.docker = 'starting'; this.phase(text); }, signal);
+    await ensureDocker((args, timeout, signal) => this.run('docker', args, timeout, signal, 'launcher', true), text => { this.snapshot.docker = 'starting'; this.phase(text); }, signal, undefined, text => this.log('launcher', text, 'error'));
     this.snapshot.docker = 'running';
     await this.detectContainer();
     this.snapshot.database = 'starting'; this.phase('启动 PostgreSQL，等待健康检查');
@@ -305,7 +320,7 @@ export class Manager extends EventEmitter {
     });
     this.appProcess = child;
     if (child.stdout) this.logStream(child.stdout, 'app'); if (child.stderr) this.logStream(child.stderr, 'app');
-    child.on('error', error => { this.snapshot.error = this.redact(error.message); this.snapshot.app = 'error'; this.changed(true); });
+    child.on('error', error => { this.snapshot.error = this.redact(error.message); this.log('launcher', this.snapshot.error, 'error'); this.snapshot.app = 'error'; this.changed(true); });
     child.on('exit', () => { if (this.appProcess === child) { this.appProcess = null; this.snapshot.app = 'stopped'; this.snapshot.startedAt = null; this.changed(true); } });
     await sleep(600, signal);
     this.identity = (await processes()).find(p => p.pid === child.pid) ?? null;

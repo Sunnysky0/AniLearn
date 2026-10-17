@@ -107,7 +107,7 @@ API (all `force-dynamic`):
 | `POST /api/tts` | Fish Audio mp3. Body `{ text, voiceId }`. In-memory cache by model+voice+text. |
 | `GET /api/voices` | Fish Audio voice search (default `lang=ja`). |
 | `GET/PUT /api/settings` | Provider keys, models, Fish key, `autoContinue`. Keys never returned in full. |
-| `GET /api/health` | `SELECT 1`. |
+| `GET /api/health` | Read-only schema readiness derived from Drizzle tables, columns, primary keys and unique keys. Returns `503` with `SCHEMA_NOT_READY` or `DATABASE_UNAVAILABLE` until ready. |
 
 Settings keys: DB row `app_settings.id = 1`, else env. Provider env: `OPENAI_API_KEY`; `ANTHROPIC_API_KEY` / `CLAUDE_API_KEY`; `XAI_API_KEY` / `GROK_API_KEY`; `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`. Fish: `FISH_API_KEY` / `FISH_AUDIO_API_KEY`. Default Fish model `s2.1-pro`. Default voice `db1553e441c84b49bf250912563ec8fc`.
 

@@ -3,11 +3,18 @@ import Image from "next/image";
 import { ArrowUpRight, BookOpen, Plus } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import { listBooks } from "@/lib/server/book-catalog";
+import { SchemaNotReadyError } from "@/lib/server/schema-readiness";
 
 export const dynamic = "force-dynamic";
 const labels: Record<string, string> = { uploaded: "待整理", importing: "整理中", review: "待校对目录", ready: "开始阅读", failed: "可续接导入" };
 export default async function BooksPage() {
-  const books = await listBooks();
+  const books = await listBooks().catch(error => {
+    if (error instanceof SchemaNotReadyError) return null;
+    throw error;
+  });
+  if (!books) return <div className="min-h-screen"><AppHeader /><main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+    <div className="border-b-2 border-neutral-900 pb-6"><h1 className="text-[32px] font-bold">数据库需要升级</h1><p className="mt-3 text-sm leading-7 text-neutral-600">请先完成数据库升级，再刷新典籍书架。已有课堂和阅读记录会保留。</p><Link href="/" className="mt-5 inline-block text-sm underline">返回首页</Link></div>
+  </main></div>;
   return <div className="min-h-screen"><AppHeader /><main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
     <div className="flex flex-wrap items-end justify-between gap-5 border-b-2 border-neutral-900 pb-6">
       <div><p className="mb-3 text-xs tracking-[.18em] text-neutral-500">READ · THINK · RETURN</p><h1 className="text-[32px] font-bold">典籍导读</h1><p className="mt-3 text-sm leading-7 text-neutral-600">从一章开始。安静地读，随时提问，再与导师一起梳理。</p></div>

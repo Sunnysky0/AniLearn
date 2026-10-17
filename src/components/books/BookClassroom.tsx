@@ -40,7 +40,7 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
   const [muted, setMuted] = useState(!props.ttsReady); const mutedRef = useRef(!props.ttsReady);
   const [rate, setRate] = useState(1); const rateRef = useRef(1);
   const [typing, setTyping] = useState<{ id: number; shown: number | null } | null>(null);
-  const [lastRequest, setLastRequest] = useState<BookTurnRequest | null>(null); const [canExit, setCanExit] = useState(false);
+  const [lastRequest, setLastRequest] = useState<BookTurnRequest | null>(null);
   const queue = useRef<BookTurnRequest[]>([]); const running = useRef(false); const disposed = useRef(false); const optimistic = useRef(-1);
   const request = useRef<AbortController | null>(null); const playback = useRef<AbortController | null>(null);
   const { controllerRef: speechAudioRef, getController: getSpeechAudio } = useSpeechAudioController();
@@ -189,9 +189,9 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
       onReveal: shown => { if (!disposed.current) setTyping({ id: message.id, shown }); } });
     if (playback.current === controller) playback.current = null; if (!disposed.current) setTyping(null);
   }
-  function stop() { getSpeechAudio().cancelPending(); request.current?.abort(); playback.current?.abort(); setCanExit(false); }
+  function stop() { getSpeechAudio().cancelPending(); request.current?.abort(); playback.current?.abort(); }
   async function runQueue() {
-    if (running.current || disposed.current) return; running.current = true; setBusy(true); setCanExit(false);
+    if (running.current || disposed.current) return; running.current = true; setBusy(true);
     try {
       while (queue.current.length && !disposed.current) {
         getSpeechAudio().cancelPending(); const next = queue.current.shift()!; setLastRequest(next); setError(""); const controller = new AbortController(); request.current = controller;
@@ -215,7 +215,6 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
           if (buffer.trim()) dispatch(JSON.parse(buffer)); await processing; if (failure) throw failure;
           const completed = done as Extract<BookTurnEvent, { type: "done" }> | null;
           if (!completed || !eof) throw new Error("课堂连接提前结束，请重试。");
-          if (!controller.signal.aborted && completed.goodbye && !queue.current.length) setCanExit(true);
         } catch (cause) { if (!controller.signal.aborted && !disposed.current) setError(cause instanceof Error ? cause.message : "导师回复失败。"); }
         finally { if (request.current === controller) request.current = null; }
       }
@@ -275,7 +274,7 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
     <ClassroomComposer value={input} onValueChange={setInput} images={images} onAddImages={addAttachments} onRemoveImage={removeAttachment} imageProcessing={attachmentsProcessing} attachmentError={attachmentError} onClearAttachmentError={clearAttachmentError} canSend={props.llmReady} busy={busy} placeholder="选中文字，或向导师提问…" quickActions={[]} onStop={stop} onHint={() => enqueue({ text: state.learning.phase === "free_reading" ? "请给我一点理解当前原文的提示。" : "请围绕当前导读角度给一个提示。" })} onSend={(text, attachments) => { enqueue({ text, images: attachments, anchor: pendingAnchor, noteIds: attachedNotes }); setInput(""); setPendingAnchor(null); setAttachedNotes([]); clearAttachments(); }} />
   </section>;
 
-  return <div className="flex h-dvh flex-col overflow-hidden bg-[#fcfcfa] text-neutral-900"><header className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b-2 border-neutral-900 px-4 py-2"><span className="hidden font-serif font-bold sm:inline">AniLearn</span><span className="w-full min-w-0 truncate text-sm font-semibold sm:w-auto sm:flex-1">{book.title}</span><Link href={`/books/${book.id}`} className="flex items-center gap-1 text-xs"><BookOpen size={15} />返回典籍</Link><button aria-label={muted ? "开启语音" : "静音"} onClick={() => { if (!muted) playback.current?.abort(); setMuted(!muted); }}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button><select aria-label="语速" value={rate} className="bg-transparent text-xs" onChange={event => setRate(Number(event.target.value))}><option value={1}>1x</option><option value={1.25}>1.25x</option><option value={1.5}>1.5x</option></select>{canExit && !busy ? <Link href="/" className="flex items-center gap-1 text-xs"><LogOut size={15} />返回首页</Link> : <button className="text-xs" disabled={busy && lastRequest?.intent === "goodbye"} onClick={() => enqueue({ intent: "goodbye" })}>结束本次阅读</button>}</header>
+  return <div className="flex h-dvh flex-col overflow-hidden bg-[#fcfcfa] text-neutral-900"><header className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b-2 border-neutral-900 px-4 py-2"><span className="hidden font-serif font-bold sm:inline">AniLearn</span><span className="w-full min-w-0 truncate text-sm font-semibold sm:w-auto sm:flex-1">{book.title}</span><Link href={`/books/${book.id}`} className="flex items-center gap-1 text-xs"><BookOpen size={15} />返回典籍</Link><button aria-label={muted ? "开启语音" : "静音"} onClick={() => { if (!muted) playback.current?.abort(); setMuted(!muted); }}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button><select aria-label="语速" value={rate} className="bg-transparent text-xs" onChange={event => setRate(Number(event.target.value))}><option value={1}>1x</option><option value={1.25}>1.25x</option><option value={1.5}>1.5x</option></select><Link href="/books" className="flex items-center gap-1 text-xs"><LogOut size={15} />退出阅读</Link></header>
     {(error || attachmentError) && <div role="alert" className="flex shrink-0 items-center gap-3 border-b bg-red-50 px-4 py-2 text-xs text-red-700">{error || attachmentError}{lastRequest && error && <button className="underline" onClick={() => enqueue(lastRequest)}>重试提问</button>}<button className="ml-auto" onClick={() => setError("")}>关闭</button></div>}
     <ReadingWorkspace tutor={tutorPanel} open={tutorOpen} onOpenChange={setTutorOpen}><div className="flex min-h-0 flex-1 flex-col"><nav aria-label="典籍阅读内容" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2">{([{ id: "source", label: "原文", icon: BookOpen }, { id: "notes", label: "我的笔记", icon: NotebookPen }, { id: "analysis", label: "本章导读", icon: MessageSquare }, { id: "summary", label: "全书总结", icon: FileText }] as const).map(item => <button key={item.id} aria-pressed={tab === item.id} className={`flex items-center gap-1 px-3 py-2 text-xs ${tab === item.id ? "bg-neutral-900 text-white" : ""}`} onClick={() => setTab(item.id)}><item.icon size={14} />{item.label}</button>)}</nav>
       <div className={`min-h-0 flex-1 ${tab === "source" ? "flex flex-col" : "overflow-y-auto p-5 sm:p-8"}`}>

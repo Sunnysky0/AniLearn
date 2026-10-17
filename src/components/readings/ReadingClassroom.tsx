@@ -73,7 +73,6 @@ export default function ReadingClassroom(props: {
   const rateRef = useRef(1);
   const [typing, setTyping] = useState<{ id: number; shown: number | null } | null>(null);
   const [lastRequest, setLastRequest] = useState<TurnRequest | null>(null);
-  const [canExit, setCanExit] = useState(props.session.status === "completed" || !!props.session.learning.analysisCompletedAt);
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>({ status: "idle", completedChunks: 0, totalChunks: 0, running: false, resumable: false, error: null });
   const [pendingSelection, setPendingSelection] = useState<ReadingSelection | null>(null);
   const pendingSelectionRef = useRef<ReadingSelection | null>(null);
@@ -260,12 +259,12 @@ export default function ReadingClassroom(props: {
   }
 
   function stop() {
-    getSpeechAudio().cancelPending(); request.current?.abort(); playback.current?.abort(); setCanExit(false);
+    getSpeechAudio().cancelPending(); request.current?.abort(); playback.current?.abort();
   }
 
   async function runQueue() {
     if (running.current || disposed.current) return;
-    running.current = true; setBusy(true); setCanExit(false);
+    running.current = true; setBusy(true);
     try {
       while (pending.current.length && !disposed.current) {
         getSpeechAudio().cancelPending();
@@ -318,7 +317,6 @@ export default function ReadingClassroom(props: {
           await processing;
           if (processingError) throw processingError;
           if (!done || !eof) throw new Error("课堂连接提前结束，请重试。");
-          if (!controller.signal.aborted && (done.goodbye || done.session.status === "completed") && !pending.current.length) setCanExit(true);
         } catch (cause) {
           if (!controller.signal.aborted && !disposed.current) setError(cause instanceof Error ? cause.message : String(cause));
         } finally { if (request.current === controller) request.current = null; }
@@ -354,7 +352,7 @@ export default function ReadingClassroom(props: {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "课堂状态更新失败。");
-      replaceSession(data); setCanExit(data.status === "completed" || !!data.learning.analysisCompletedAt);
+      replaceSession(data);
       return true;
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return false; }
     finally { setAnalysisBusy(false); }
@@ -424,7 +422,7 @@ export default function ReadingClassroom(props: {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
 
-  async function leaveToArticle() {
+  async function leaveReading(destination = `/readings/${reading.id}`) {
     if (docDraft !== docSaved.current) {
       await saveDocument(docDraft);
       if (docSaved.current !== docDraft) return;
@@ -432,7 +430,7 @@ export default function ReadingClassroom(props: {
     await Promise.all(personalNotes.filter((note) => note.kind === "annotation" && annotationDrafts[note.id] !== note.content).map((note) => saveAnnotation(note.id, annotationDrafts[note.id] ?? note.content)));
     if (personalNotes.some((note) => note.kind === "annotation" && (notesRef.current.find((item) => item.id === note.id)?.content !== (annotationDrafts[note.id] ?? note.content)))) return;
     if (readerPositionRef.current) await saveBookmark(readerPositionRef.current);
-    window.location.assign(`/readings/${reading.id}`);
+    window.location.assign(destination);
   }
 
   function readerQuestion(anchor: ReaderAnchor) {
@@ -516,11 +514,10 @@ export default function ReadingClassroom(props: {
     <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b-2 border-neutral-900 px-4 py-2">
       <span className="hidden font-serif font-bold sm:inline">AniLearn</span>
       <span className="w-full min-w-0 truncate text-sm font-semibold sm:w-auto sm:flex-1">{reading.title}</span>
-      <button className="flex items-center gap-2 border px-3 py-1.5 text-xs" onClick={() => void leaveToArticle()}><LogOut className="h-4 w-4" />返回文章</button>
-      {canExit && !busy && <Link href="/" className="flex items-center gap-2 text-sm"><LogOut className="h-4 w-4" />返回首页</Link>}
+      <button className="flex items-center gap-2 border px-3 py-1.5 text-xs" onClick={() => void leaveReading()}><LogOut className="h-4 w-4" />返回文章</button>
       <button className="p-2" title={muted ? "开启语音" : "静音"} aria-label={muted ? "开启语音" : "静音"} onClick={() => { if (!muted) playback.current?.abort(); setMuted(!muted); }}>{muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}</button>
       <select aria-label="语速" value={rate} onChange={(event) => setRate(Number(event.target.value))} className="bg-transparent text-sm"><option value={1}>1x</option><option value={1.25}>1.25x</option><option value={1.5}>1.5x</option></select>
-      {!canExit && <button disabled={busy && lastRequest?.intent === "goodbye"} className="flex items-center gap-2 text-sm" onClick={() => enqueue({ text: "", intent: "goodbye" })}><LogOut className="h-4 w-4" />结束本次阅读</button>}
+      <Link href="/readings" className="flex items-center gap-2 text-sm" onNavigate={(event) => { event.preventDefault(); void leaveReading("/readings"); }}><LogOut className="h-4 w-4" />退出阅读</Link>
     </header>
     <ReadingWorkspace open={tutorOpen} onOpenChange={setTutorOpen} tutor={tutorPanel}>
       <section className="flex min-h-0 flex-1 flex-col">

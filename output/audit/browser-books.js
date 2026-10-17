@@ -370,8 +370,8 @@ async (page) => {
     await stop().click(); await stop().waitFor({ state: 'hidden' });
     await page.waitForFunction(() => window.__booksQa.active === 0);
     audio = await voice(); assert(audio.requests.some(request => request.error === 'AbortError') && audio.plays.length === 0, 'Interruption did not cancel pending synthesis');
-    assert(await page.getByRole('link', { name: '返回首页', exact: true }).count() === 0, 'Cancellation unlocked the exit control');
-    pass('book interruption cancels pending synthesis and does not unlock goodbye');
+    assert(await page.getByRole('link', { name: '退出阅读', exact: true }).getAttribute('href') === '/books', 'Direct exit was unavailable after cancellation');
+    pass('book interruption cancels pending synthesis and keeps direct exit available');
     ttsMode = 'failure'; await resetVoice(); await send('语音失败时仍请显示完整文字。'); await stop().waitFor(); const fallbackTurn = turns.at(-1);
     const fallbackEvents = await recordedTurn(fallbackTurn.requestId); await idle(); audio = await voice();
     assert(audio.requests.some(request => request.status === 503) && audio.plays.length === 1, 'Speech failure did not use text fallback and continue the queue');
@@ -411,15 +411,12 @@ async (page) => {
     assert(saved.session.chapters.find(chapter => chapter.chapterId === previousChapter).learning.completedAt, 'Completed chapter state was lost');
     pass('reading → prepared chapter → direct first-focus lecture → explicit focus and chapter completion → silent next chapter');
 
-    await unmute(); turnMode = 'goodbye'; const exitState = JSON.stringify(learning(saved)); const goodbyeCount = turns.length;
-    await page.getByRole('button', { name: '结束本次阅读', exact: true }).click(); await openTutor(); await stop().waitFor();
-    assert(await page.getByRole('link', { name: '返回首页', exact: true }).count() === 0, 'Return-home unlocked before goodbye playback/EOF');
-    const goodbyeTurn = await lastTurnAfter(goodbyeCount); await recordedTurn(goodbyeTurn.requestId); await idle();
-    assert(JSON.stringify(learning(await bundle())) === exitState, 'Goodbye changed next-chapter learning progress');
-    await page.getByRole('link', { name: '返回首页', exact: true }).click(); await page.waitForURL(base + '/');
+    await unmute(); const exitState = JSON.stringify(learning(saved)); const beforeExit = { turns: turns.length, tts: tts.length };
+    await page.getByRole('link', { name: '退出阅读', exact: true }).click(); await page.waitForURL(base + '/books');
+    assert(turns.length === beforeExit.turns && tts.length === beforeExit.tts, 'Direct exit requested a tutor reply or speech');
+    assert(JSON.stringify(learning(await bundle())) === exitState, 'Direct exit changed next-chapter learning progress');
     await page.waitForFunction(() => window.__booksQa.created.every(url => window.__booksQa.revoked.includes(url)));
-    pass('goodbye preserves progress, waits for playback/EOF, returns home and revokes cached URLs');
-    turnMode = 'normal';
+    pass('direct exit preserves progress, returns to the bookshelf without a tutor turn and revokes cached URLs');
 
     // A successful server upload with a lost browser response must reuse the
     // requestId, including while the first MOBI conversion is still running.

@@ -159,7 +159,7 @@ function componentHarness(options: { analysisPhase?: boolean } = {}) {
   let tree = render();
   const container = find(tree, node => !!node?.props?.ref && !!find(node.props.children, child => child?.type === "Reader"));
   container.props.ref.current = { querySelector: () => ({ getBoundingClientRect: () => ({ height: 500 }) }) };
-  return { session, runEffects, render: () => { tree = render(); return tree; }, find: (type: string) => find(tree, node => node?.type === type), text: () => text(tree), setVisible: (position: typeof visible) => { visible = position; }, visible: () => visible };
+  return { session, runEffects, render: () => { tree = render(); return tree; }, find: (type: string) => find(tree, node => node?.type === type), findLink: (href: string) => find(tree, node => node?.type === "Link" && node.props.href === href), text: () => text(tree), setVisible: (position: typeof visible) => { visible = position; }, visible: () => visible };
 }
 async function settle() { for (let index = 0; index < 10; index++) await new Promise<void>(resolve => setImmediate(resolve)); }
 
@@ -206,7 +206,7 @@ test("a bookmark lock conflict retries finitely and never sends a question with 
     await settle(); view.render(); assert.equal(saves, 4); assert.equal(turns, 0); assert.ok(view.text().includes("课堂正在生成。"));
   } finally { globalThis.fetch = originalFetch; }
 });
-test("cancelled bookmark flushing stops the question and keeps goodbye locked", async () => {
+test("cancelled bookmark flushing stops the question and keeps direct exit available", async () => {
   const view = componentHarness(); const originalFetch = globalThis.fetch; let saves = 0; let turns = 0;
   globalThis.fetch = async (_input, init) => {
     if (init?.method !== "PATCH") { turns++; return Response.json({}); }
@@ -217,8 +217,10 @@ test("cancelled bookmark flushing stops the question and keeps goodbye locked", 
     });
   };
   try {
+    assert.ok(view.findLink("/books"));
     view.find("Composer").props.onSend("解释当前段落。", []); await settle(); assert.equal(saves, 1);
+    view.render(); assert.equal(view.find("Composer").props.busy, true); assert.ok(view.findLink("/books"));
     view.find("Composer").props.onStop(); await settle(); view.render();
-    assert.equal(turns, 0); assert.equal(view.find("Composer").props.busy, false); assert.ok(!view.text().includes("返回首页"));
+    assert.equal(turns, 0); assert.equal(view.find("Composer").props.busy, false); assert.ok(view.findLink("/books"));
   } finally { globalThis.fetch = originalFetch; }
 });

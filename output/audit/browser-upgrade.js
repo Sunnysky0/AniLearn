@@ -68,11 +68,11 @@ async (page) => {
     await page.getByRole('button', { name: '发送', exact: true }).click();
     for (let i = 0; i < 40 && !sent.some(s => s.text === '我想比较两种表达。'); i++) await page.waitForTimeout(250);
     ensure(sent.some(s => s.text === '再帮我看一下关键词。') && sent.some(s => s.text === '我想比较两种表达。'), 'Queued reading input lost');
-    await page.getByRole('button', { name: '结束本次阅读', exact: true }).click();
-    await page.getByRole('link', { name: '返回首页', exact: true }).waitFor({ timeout: 20000 });
-    await page.getByRole('link', { name: '返回首页', exact: true }).click();
-    await page.waitForURL(base + '/');
-    results.push({ test: language + ' upload/review, notes/practice, positioning, recovery, queued interruption and goodbye', outcome: 'pass', classUrl });
+    const beforeExit = { turns: sent.length, tts: tts.length };
+    await page.getByRole('link', { name: '退出阅读', exact: true }).click();
+    await page.waitForURL(base + '/readings');
+    ensure(sent.length === beforeExit.turns && tts.length === beforeExit.tts, 'Direct reading exit requested a tutor reply or speech');
+    results.push({ test: language + ' upload/review, notes/practice, positioning, recovery, queued interruption and direct exit', outcome: 'pass', classUrl });
     await page.setViewportSize({ width: 1440, height: 960 });
   }
   const wav = Buffer.alloc(44 + 8000 * 3 * 2);

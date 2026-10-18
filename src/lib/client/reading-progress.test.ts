@@ -18,6 +18,24 @@ function options(fetcher: typeof fetch, cache = storage(), state = initial()) {
   return { document, url: "/api/reading-sessions/1/reader-state", initial: state, storage: cache, fetcher, id: () => `operation-${++id}`, delay: async () => undefined };
 }
 
+test("the default browser fetch keeps its global receiver", async () => {
+  const originalFetch = globalThis.fetch;
+  let receiver: unknown;
+  globalThis.fetch = function (this: typeof globalThis, _input: RequestInfo | URL, init?: RequestInit) {
+    receiver = this;
+    return Promise.resolve(ack(JSON.parse(String(init?.body)) as ReadingPositionMutation));
+  };
+  try {
+    const writer = new ReadingProgressController({ document, url: "/api/reading-sessions/1/reader-state", initial: initial(), storage: storage() });
+    writer.update(position(77));
+    assert.equal(await writer.flush(), true);
+    assert.equal(receiver, globalThis);
+    writer.detach();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("rapid page turns coalesce and an older response cannot replace a newer local position", async () => {
   const sent: ReadingPositionMutation[] = []; let release!: () => void; let active = 0; let maxActive = 0;
   const gate = new Promise<void>(resolve => { release = resolve; });

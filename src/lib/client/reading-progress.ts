@@ -41,7 +41,7 @@ export class ReadingProgressController {
     this.storageKey = `anilearn:reading-progress:${options.document.key}`;
     this.revision = options.initial.revision;
     this.view = { position: validateReaderPosition(options.document, options.initial.position), status: "saved", error: "" };
-    this.fetcher = options.fetcher ?? fetch;
+    this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     this.id = options.id ?? (() => crypto.randomUUID());
     this.ownerId = options.ownerId ?? this.id();
     this.delay = options.delay ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));

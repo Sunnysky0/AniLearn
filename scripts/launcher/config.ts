@@ -69,7 +69,7 @@ export function makeRedactor(env: NodeJS.ProcessEnv) {
   };
 }
 export function logLevel(text: string): 'info' | 'error' {
-  return /error|fail|fatal|exception|timeout|timed out|错误|失败|异常|超时|未完成/i.test(text) ? 'error' : 'info';
+  return /error|fail|fatal|exception|timeout|timed out|错误|失败|异常|超时|未完成/i.test(text) || /^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \S+ [45]\d{2}(?:\s|$)/.test(text) ? 'error' : 'info';
 }
 export function createApplicationLogFilter(suppress = false) {
   return (input: string) => {

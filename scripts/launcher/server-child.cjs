@@ -1,3 +1,5 @@
+if (process.argv[2] === 'start') require('./request-logging.cjs').installRequestLogging();
+
 // IPC requests let Next run its own signal cleanup before the supervisor's bounded fallback.
 process.on('message', message => {
   if (message?.type === 'stop') process.emit('SIGINT', 'SIGINT');

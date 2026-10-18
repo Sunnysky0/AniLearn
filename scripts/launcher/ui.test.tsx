@@ -43,6 +43,14 @@ test('large, regular and narrow terminal layouts fit and keyboard controls work'
     }
     const send = async (input: string) => { view.stdin.write(input); await pause(); };
     await resize(80, 24);
+    const appendLog = async (text: string) => {
+      const current = emitter.snapshot!;
+      emitter.snapshot = { ...current, logs: [...current.logs, { id: current.logs.at(-1)!.id + 1, time: Date.now(), source: 'app', level: 'info', text }] };
+      emitter.emit('snapshot', emitter.snapshot); await pause();
+    };
+    await appendLog('GET /readings 200 12ms'); assert.ok(view.lastFrame()!.includes('GET /readings 200 12ms'));
+    await send(' '); await appendLog('POST /api/readings 201 24ms'); assert.ok(!view.lastFrame()!.includes('POST /api/readings 201 24ms'));
+    await send('\x1b[F'); assert.ok(view.lastFrame()!.includes('POST /api/readings 201 24ms'));
     await send('\t'); assert.ok(view.lastFrame()!.includes('资源'));
     await send('v'); assert.ok(view.lastFrame()!.includes('应用内存'));
     await send('n'); assert.ok(view.lastFrame()!.includes('数据库容器'));

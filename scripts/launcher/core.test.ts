@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { configFor, databaseLog, fingerprint, loadEnvironment, makeRedactor, saveJson } from './config';
+import { configFor, createApplicationLogFilter, databaseLog, fingerprint, loadEnvironment, logLevel, makeRedactor, saveJson } from './config';
 import { ensureDocker } from './docker';
 import { belongsToProject, descendants, matchesRecord, recordProcess, sameProcess } from './processes';
 import { parseBytes } from './manager';
@@ -79,6 +79,16 @@ test('log filters combine source, search, severity and paused snapshot', () => {
   ];
   assert.deepEqual(filterLogs(logs, 'app', '中文', true, null).map(line => line.id), [3]);
   assert.deepEqual(filterLogs(logs, 'all', '', false, 2).map(line => line.id), [1, 2]);
+});
+
+test('HTTP failure logs reach the error filter without mistaking an ID for a status', () => {
+  const filter = createApplicationLogFilter(true);
+  assert.equal(filter('POST /api/reading-sessions/1/turn 开始'), 'POST /api/reading-sessions/1/turn 开始');
+  for (const line of ['POST /api/reading-sessions/1/turn 503 10ms', 'GET /books/1 404 in 15ms']) {
+    assert.equal(filter(line), line); assert.equal(logLevel(line), 'error');
+  }
+  assert.equal(logLevel('GET /books/503 200 12ms'), 'info');
+  assert.equal(logLevel('POST /api/reading-sessions/1/turn 开始'), 'info');
 });
 test('mode changes override the environment loader initial mode', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'anilearn-env-'));

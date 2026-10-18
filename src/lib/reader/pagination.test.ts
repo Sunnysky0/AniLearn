@@ -61,6 +61,21 @@ test("layout geometry can change without changing the saved UTF-16 character", (
   } finally { fixture.close(); }
 });
 
+test("image-only book pages retain a block anchor before and after resource layout", () => {
+  const fixture = geometry("", 12);
+  try {
+    fixture.document.key = "book:1:version:3"; fixture.document.unitId = "cover";
+    fixture.document.blocks = [{ id: "b", kind: "image", nodes: [], anchorText: "", assetId: "cover" }];
+    fixture.leaves.splice(0);
+    const element = fixture.article.querySelectorAll<HTMLElement>("[data-reader-block]")[0];
+    element.getClientRects = () => [{ left: 548, right: 900 } as DOMRect] as unknown as DOMRectList;
+    element.getBoundingClientRect = () => ({ left: 548, height: 200 } as DOMRect);
+    const saved = pagePosition(fixture.article, fixture.document, 1, fixture.width)!;
+    assert.equal(saved.blockId, "b"); assert.equal(saved.offset, 0);
+    assert.equal(positionPage(fixture.article, saved, fixture.stride), 1);
+  } finally { fixture.close(); }
+});
+
 test("atomic formulas and rich-text boundaries keep their canonical offsets", () => {
   const fixture = geometry("firstx^2日本語", 5);
   try {

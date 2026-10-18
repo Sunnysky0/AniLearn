@@ -1,6 +1,6 @@
 import type { ReaderDocument, ReaderPosition } from "@/lib/book-types";
 import { blockText } from "./anchors";
-import { readerRange } from "./dom-selection";
+import { readerElement, readerRange } from "./dom-selection";
 
 export const PAGE_GAP = 48;
 export function columnIndex(x: number, stride: number): number {
@@ -13,7 +13,7 @@ export function clampPage(page: number, count: number): number { return Math.max
 
 export function positionPage(article: HTMLElement, position: ReaderPosition, stride: number): number | null {
   const range = readerRange(article, position.blockId, position.offset);
-  const rect = range?.getBoundingClientRect();
+  const rect = range?.getBoundingClientRect() ?? readerElement(article, position.blockId)?.getBoundingClientRect();
   return rect && rect.height ? columnIndex(rect.left - article.getBoundingClientRect().left, stride) : null;
 }
 
@@ -50,6 +50,7 @@ export function pagePosition(article: HTMLElement, document: ReaderDocument, pag
       }
       return { documentKey: document.key, unitId: document.unitId, blockId, offset, viewportOffset: 0 };
     }
+    if (!blockText(blocks.get(blockId)!)) return { documentKey: document.key, unitId: document.unitId, blockId, offset: 0, viewportOffset: 0 };
   }
   return null;
 }

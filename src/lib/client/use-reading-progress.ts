@@ -41,9 +41,12 @@ export function useReadingProgress(document: ReaderDocument, sessionId: number, 
 }
 
 export function useReadingBookmarks(sessionId: number, initial: ReadingBookmarkDTO[]) {
+  return useReaderBookmarks(`/api/reading-sessions/${sessionId}/bookmarks`, initial);
+}
+
+export function useReaderBookmarks<T extends ReadingBookmarkDTO>(base: string, initial: T[]) {
   const [bookmarks, setBookmarks] = useState(initial);
   const pending = useRef(new Map<string, string>());
-  const base = `/api/reading-sessions/${sessionId}/bookmarks`;
   const request = useCallback(async (url: string, method: string, body: unknown) => {
     const response = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await response.json();
@@ -57,14 +60,14 @@ export function useReadingBookmarks(sessionId: number, initial: ReadingBookmarkD
     return data;
   }, [base]);
   const create = useCallback(async (position: ReaderPosition) => {
-    const key = `${position.blockId}:${position.offset}`;
+    const key = JSON.stringify(position);
     const clientId = pending.current.get(key) ?? crypto.randomUUID(); pending.current.set(key, clientId);
-    const saved = await request(base, "POST", { clientId, position }) as ReadingBookmarkDTO;
+    const saved = await request(base, "POST", { clientId, position }) as T;
     pending.current.delete(key);
     setBookmarks(all => [...all.filter(item => item.id !== saved.id), saved].sort((a, b) => a.id - b.id));
   }, [base, request]);
   const rename = useCallback(async (bookmark: ReadingBookmarkDTO, title: string) => {
-    const saved = await request(`${base}/${bookmark.id}`, "PATCH", { title, revision: bookmark.revision }) as ReadingBookmarkDTO;
+    const saved = await request(`${base}/${bookmark.id}`, "PATCH", { title, revision: bookmark.revision }) as T;
     setBookmarks(all => all.map(item => item.id === saved.id ? saved : item));
   }, [base, request]);
   const remove = useCallback(async (bookmark: ReadingBookmarkDTO) => {

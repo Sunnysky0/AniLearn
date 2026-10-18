@@ -46,10 +46,22 @@ export interface ReaderAnnotation { id: number | string; anchor: ReaderAnchor; c
 export interface ReaderBookmark {
   id: number; clientId: string; position: ReaderPosition; title: string; excerpt: string;
   revision: number; updatedAt: string;
+  chapterTitle?: string;
 }
+export interface BookReaderStateDTO {
+  documentKey: string; position: ReaderPosition | null; chapterPositions: Record<string, ReaderPosition>;
+  revision: number; mutationId: string | null; updatedAt: string | null;
+}
+export interface BookBookmarkDTO extends ReaderBookmark { chapterTitle: string }
+export interface ReaderHandle { getPosition: () => ReaderPosition | null }
 export interface ReaderProps {
   document: ReaderDocument;
   layout?: "scroll" | "paged";
+  contentKind?: "article" | "book";
+  handleRef?: { current: ReaderHandle | null };
+  navigation?: { id: number; position: ReaderPosition } | null;
+  onNavigatePosition?: (position: ReaderPosition, save?: boolean) => void;
+  onStart?: () => void;
   initialPosition?: ReaderPosition | null;
   entryPosition?: ReaderPosition | null;
   bookmarks?: ReaderBookmark[];

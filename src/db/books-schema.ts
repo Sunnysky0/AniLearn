@@ -60,3 +60,19 @@ export const bookPersonalNotes = pgTable("book_personal_notes", {
   anchor: jsonb("anchor").$type<ReaderAnchor>(), revision: integer("revision").notNull().default(0),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, t => [uniqueIndex("book_personal_notes_version_client_uq").on(t.versionId, t.clientId)]);
+
+export const bookReaderStates = pgTable("book_reader_states", {
+  versionId: integer("version_id").primaryKey().references(() => bookVersions.id, { onDelete: "cascade" }),
+  position: jsonb("position").$type<ReaderPosition>().notNull(),
+  chapterPositions: jsonb("chapter_positions").$type<Record<string, ReaderPosition>>().notNull().default({}),
+  revision: integer("revision").notNull().default(0), mutationId: text("mutation_id"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+export const bookBookmarks = pgTable("book_bookmarks", {
+  id: serial("id").primaryKey(),
+  versionId: integer("version_id").notNull().references(() => bookVersions.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull(), position: jsonb("position").$type<ReaderPosition>().notNull(),
+  title: text("title").notNull(), excerpt: text("excerpt").notNull(),
+  revision: integer("revision").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, t => [uniqueIndex("book_bookmarks_version_client_uq").on(t.versionId, t.clientId)]);

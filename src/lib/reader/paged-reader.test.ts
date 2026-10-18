@@ -10,7 +10,7 @@ import * as pagination from "./pagination";
 // measurements. CSS fragmentation and physical selection remain manual acceptance.
 function reader() {
   const slots: any[] = []; let cursor = 0; const effects: (() => void)[] = []; const layouts: (() => void)[] = [];
-  const same = (a: any[], b: any[]) => a?.length === b?.length && a.every((value, index) => value === b[index]);
+  const same = (a: any[], b: any[]) => !!a && !!b && a.length === b.length && a.every((value, index) => value === b[index]);
   const effect = (callback: () => void, dependencies: any[], queue: (() => void)[]) => {
     const id = cursor++; if (!slots[id] || !same(slots[id].dependencies, dependencies)) {
       slots[id]?.cleanup?.(); slots[id] = { dependencies }; queue.push(() => { slots[id].cleanup = callback(); });
@@ -25,7 +25,7 @@ function reader() {
   };
   const previous = { window: globalThis.window, requestAnimationFrame: globalThis.requestAnimationFrame, cancelAnimationFrame: globalThis.cancelAnimationFrame, ResizeObserver: globalThis.ResizeObserver, localStorage: globalThis.localStorage };
   const frames = new Map<number, FrameRequestCallback>(); let next = 0;
-  const fontEvents = new Map<string, () => void>(); let resized = () => undefined as void;
+  const fontEvents = new Map<string, () => void>(); const bodyEvents = new Map<string, () => void>(); let resized = () => undefined as void;
   let capacity = 400; let width = 700; let height = 450; let rendered = 100; let tree: any;
   const saved: ReaderPosition = { documentKey: "reading:1:3", unitId: "article", blockId: "b510", offset: 44, viewportOffset: 11 };
   const positions: ReaderPosition[] = []; const bookmarks: ReaderPosition[] = [];
@@ -37,10 +37,10 @@ function reader() {
   globalThis.window = { getSelection: () => ({ toString: () => "", removeAllRanges() {} }), document: { fonts: { addEventListener: (name: string, callback: () => void) => fontEvents.set(name, callback), removeEventListener: (name: string) => fontEvents.delete(name) } } } as unknown as Window & typeof globalThis;
   globalThis.localStorage = { getItem: () => null, setItem() {} } as unknown as Storage;
   const viewport = { scrollHeight: 450, getBoundingClientRect: () => ({ width, height }), addEventListener() {}, removeEventListener() {} };
-  const body = { style: { transform: "", columnWidth: "", setProperty() {} }, get scrollWidth() { return Math.ceil(rendered * 100 / capacity) * (width + 48) - 48; }, addEventListener() {}, removeEventListener() {} };
+  const body = { style: { transform: "", columnWidth: "", setProperty() {} }, get scrollWidth() { return Math.ceil(rendered * 100 / capacity) * (width + 48) - 48; }, addEventListener(name: string, callback: () => void) { bodyEvents.set(name, callback); }, removeEventListener(name: string) { bodyEvents.delete(name); } };
   const geometry = { ...pagination,
     positionPage(_body: unknown, position: ReaderPosition) { const index = Number(position.blockId.slice(1)); return index < rendered ? Math.floor((index * 100 + position.offset) / capacity) : null; },
-    pagePosition(_body: unknown, _document: unknown, page: number) { const global = page * capacity; return { ...saved, blockId: `b${Math.floor(global / 100)}`, offset: global % 100, viewportOffset: 0 }; } };
+    pagePosition(_body: unknown, document: ReaderProps["document"], page: number) { const global = page * capacity; return { ...saved, documentKey: document.key, unitId: document.unitId, blockId: `b${Math.floor(global / 100)}`, offset: global % 100, viewportOffset: 0 }; } };
   const compiled = ts.transpileModule(readFileSync("src/components/reader/Reader.tsx", "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const dependencies: Record<string, unknown> = { react, "react/jsx-runtime": { jsx: (type: any, props: any) => ({ type, props }), jsxs: (type: any, props: any) => ({ type, props }) },
     "lucide-react": new Proxy({}, { get: (_target, key) => String(key) }), "@/components/Markdown": { Markdown: "Markdown" }, "@/lib/reader/anchors": anchors,
@@ -67,8 +67,10 @@ function reader() {
   const click = (label: string) => { const value = control(label); assert.ok(!value.props.disabled, `${label} enabled`); value.props.onClick(); settle(); };
   settle();
   return { props, positions, bookmarks, click, control, body, settle,
+    contains: (label: string) => text(tree).includes(label),
     footer: () => text(find(tree, node => node?.props?.["aria-label"] === "翻页导航")),
     reflow(value: number) { capacity = value; width -= 10; height -= 10; resized(); fontEvents.get("loadingdone")?.(); settle(); },
+    imageLoaded(value: number) { capacity = value; bodyEvents.get("load")?.(); settle(); },
     key(key: string, editing = false) { let prevented = false; tree.props.onKeyDown({ key, target: { closest: () => editing ? {} : null }, preventDefault() { prevented = true; } }); settle(); return prevented; },
     jump(value: number) { const input = find(tree, node => node?.props?.["aria-label"] === "跳转页码"); input.props.onChange({ target: { value: String(value) } }); commit(); find(tree, node => node?.type === "form" && !!find(node.props.children, child => child?.props?.["aria-label"] === "跳转页码")).props.onSubmit({ preventDefault() {} }); settle(); },
     close() { for (const slot of slots) slot?.cleanup?.(); Object.assign(globalThis, previous); } };
@@ -106,5 +108,52 @@ test("head, entry-position, page-jump and final-page controls preserve learning 
     env.jump(251); assert.ok(env.footer().includes("全文结束")); assert.ok(env.control("下一页").props.disabled);
     const count = env.positions.length; env.reflow(600); assert.equal(env.positions.length, count);
     assert.equal(env.props.onUnitChange, undefined); assert.equal(env.props.onQuestion, undefined);
+  } finally { env.close(); }
+});
+
+test("paged books retain chapter tools, skip structural nodes and never flip into another chapter", () => {
+  const env = reader(); const changed: string[] = [];
+  try {
+    env.props.contentKind = "book"; env.props.document.units = ["article", "empty", "c2"].map((id, order) => ({ id, order, title: id, role: "main", parentId: null, blockCount: id === "empty" ? 0 : 1003 }));
+    env.props.onUnitChange = id => changed.push(id); env.settle();
+    assert.ok(env.control("章节目录")); assert.ok(env.control("搜索本章全文")); assert.ok(env.control("本章开头"));
+    env.jump(251); assert.ok(env.footer().includes("本章结束")); assert.ok(env.control("下一页").props.disabled);
+    assert.deepEqual(changed, []); assert.equal(env.key("ArrowRight"), true); assert.deepEqual(changed, []);
+    env.click("下一章"); assert.deepEqual(changed, ["c2"]);
+    env.props.document = { ...env.props.document, unitId: "c2" }; env.props.initialPosition = null; env.settle(); env.jump(251);
+    assert.ok(env.footer().includes("全书结束")); assert.ok(env.control("下一章").props.disabled);
+  } finally { env.close(); }
+});
+
+test("book cross-chapter entry and bookmark navigation carry full positions and retain the entry anchor", () => {
+  const env = reader(); const navigated: ReaderPosition[] = [];
+  try {
+    const entry = env.props.entryPosition!;
+    env.props.contentKind = "book"; env.props.onNavigatePosition = position => navigated.push(position);
+    env.props.handleRef = { current: null };
+    env.props.document = { ...env.props.document, unitId: "c2" };
+    env.props.initialPosition = { ...entry, unitId: "c2", blockId: "b200", offset: 31 };
+    env.settle();
+    env.click("回到上次位置"); assert.deepEqual(navigated, [entry]); assert.equal(env.positions.length, 0);
+    env.props.navigation = { id: 1, position: { ...entry, unitId: "c2", blockId: "b300", offset: 61 } }; env.settle();
+    assert.equal(env.props.handleRef.current?.getPosition()?.offset, 61);
+    env.imageLoaded(300); assert.equal(env.props.handleRef.current?.getPosition()?.offset, 61); assert.equal(env.positions.length, 0);
+    env.props.bookmarks = [{ id: 1, clientId: "bookmark-1", position: entry, title: "Entry", excerpt: "source excerpt", chapterTitle: "First chapter", revision: 0, updatedAt: "now" }];
+    env.click("书签"); assert.ok(env.contains("First chapter")); env.click("跳转到书签：Entry"); assert.deepEqual(navigated, [entry, entry]);
+  } finally { env.close(); }
+});
+
+test("a previously applied quote does not pull cross-chapter footnote inspection back to its chapter", () => {
+  const env = reader(); const units: string[] = [];
+  try {
+    env.props.contentKind = "book";
+    env.props.onUnitChange = unitId => units.push(unitId);
+    env.props.inspectAnchor = anchors.anchorAt(env.props.document, "b900", 12, 20);
+    env.settle(); assert.equal(env.positions.length, 0);
+    env.props.document = { ...env.props.document, unitId: "c2" };
+    env.props.initialPosition = null; env.settle();
+    assert.deepEqual(units, []); assert.equal(env.positions.length, 0);
+    env.props.inspectAnchor = { ...env.props.inspectAnchor! }; env.settle();
+    assert.deepEqual(units, ["article"]);
   } finally { env.close(); }
 });

@@ -2,12 +2,71 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { ReaderDocument, ReaderPosition } from "@/lib/book-types";
 import type { ReadingPositionMutation, ReadingReaderStateDTO } from "@/lib/types";
-import { ReadingProgressController } from "./reading-progress";
+import { pendingReadingPositions, ReadingProgressController } from "./reading-progress";
+import { validateReaderPosition } from "@/lib/reader/anchors";
 
 const document: ReaderDocument = { key: "reading:2:3", title: "Article", language: "en", unitId: "article", units: [],
   blocks: [{ id: "p1", kind: "paragraph", nodes: [{ type: "text", text: "a".repeat(1000) }], anchorText: "" }] };
 const position = (offset: number): ReaderPosition => ({ documentKey: document.key, unitId: "article", blockId: "p1", offset, viewportOffset: 0 });
 const initial = (): ReadingReaderStateDTO => ({ documentKey: document.key, position: position(0), revision: 0, mutationId: null, updatedAt: null });
+const bookDocuments = ["c1", "c2", "c3"].map(unitId => ({ ...document, key: "book:1:version:3", unitId }));
+const bookPosition = (unitId: string, offset: number): ReaderPosition => ({ ...position(offset), documentKey: bookDocuments[0].key, unitId });
+function bookOptions(fetcher: typeof fetch, cache = storage()) {
+  return { ...options(fetcher, cache, { ...initial(), documentKey: bookDocuments[0].key, position: bookPosition("c1", 0) }), document: bookDocuments[0],
+    storageKey: "anilearn:book-progress:book:1:version:3", preserveUnits: true,
+    validatePosition(value: unknown) { const unit = bookDocuments.find(document => document.unitId === (value as ReaderPosition)?.unitId); return unit ? validateReaderPosition(unit, value) : null; } };
+}
+const bookAck = (payload: ReadingPositionMutation) => Response.json({ documentKey: bookDocuments[0].key, position: payload.position, revision: payload.revision + 1, mutationId: payload.mutationId, updatedAt: "now" });
+
+test("book writer retains every pending chapter and saves the most recent chapter last", async () => {
+  const sent: ReadingPositionMutation[] = [];
+  const writer = new ReadingProgressController(bookOptions(async (_url, request) => {
+    const body = JSON.parse(String(request?.body)); sent.push(body); return bookAck(body);
+  }));
+  writer.update(bookPosition("c1", 10)); writer.update(bookPosition("c2", 20)); writer.update(bookPosition("c1", 30));
+  assert.equal(await writer.flush(), true);
+  assert.deepEqual(sent.map(body => [body.position.unitId, body.position.offset]), [["c2", 20], ["c1", 30]]);
+  assert.equal(writer.snapshot().position?.offset, 30); writer.detach();
+});
+test("book writer recovers all chapters and an ambiguous in-flight operation after closing", async () => {
+  const cache = storage(); const first = new ReadingProgressController(bookOptions(async () => { throw new Error("offline"); }, cache));
+  first.update(bookPosition("c1", 11)); first.update(bookPosition("c2", 22));
+  assert.equal(await first.flush(true), false); first.detach();
+  const recovered = pendingReadingPositions(cache, first.storageKey);
+  assert.deepEqual(new Set(recovered.map(p => p.unitId)), new Set(["c1", "c2"]));
+  const sent: ReadingPositionMutation[] = [];
+  const second = new ReadingProgressController(bookOptions(async (_url, request) => {
+    const body = JSON.parse(String(request?.body)); sent.push(body); return bookAck(body);
+  }, cache));
+  assert.equal(second.snapshot().position?.unitId, "c2"); assert.equal(await second.flush(), true);
+  assert.deepEqual(sent.map(body => [body.position.unitId, body.position.offset]), [["c1", 11], ["c2", 22]]);
+  assert.equal(cache.values.size, 0); second.detach();
+});
+
+test("returning to the same in-flight book character keeps it last after pending chapters", async () => {
+  const sent: ReadingPositionMutation[] = []; let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const writer = new ReadingProgressController(bookOptions(async (_url, request) => {
+    const body = JSON.parse(String(request?.body)); sent.push(body); if (sent.length === 1) await gate; return bookAck(body);
+  }));
+  writer.update(bookPosition("c1", 12)); const saving = writer.flush();
+  writer.update(bookPosition("c2", 20)); writer.update(bookPosition("c1", 12)); release();
+  assert.equal(await saving, true);
+  assert.deepEqual(sent.map(body => [body.position.unitId, body.position.offset]), [["c1", 12], ["c2", 20], ["c1", 12]]);
+  assert.deepEqual(writer.snapshot().position, bookPosition("c1", 12)); writer.detach();
+});
+
+test("an acknowledged cached return still follows other unsaved book chapters on recovery", async () => {
+  const cache = storage(); const first = bookPosition("c1", 12); const second = bookPosition("c2", 20);
+  const setup = bookOptions(async () => Response.json({}), cache);
+  cache.setItem(setup.storageKey, JSON.stringify({ version: 1, entries: { old: { documentKey: first.documentKey, revision: 0,
+    inFlight: { position: first, revision: 0, mutationId: "committed-operation" }, latest: first, positions: [second, first] } } }));
+  const sent: ReadingPositionMutation[] = [];
+  const writer = new ReadingProgressController({ ...setup, initial: { ...setup.initial, revision: 1, mutationId: "committed-operation", position: first },
+    fetcher: async (_url, request) => { const body = JSON.parse(String(request?.body)); sent.push(body); return bookAck(body); } });
+  assert.equal(await writer.flush(), true);
+  assert.deepEqual(sent.map(body => body.position), [second, first]); assert.equal(cache.values.size, 0); writer.detach();
+});
 function storage() {
   const values = new Map<string, string>();
   return { values, getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };

@@ -2,7 +2,7 @@ import type { ReaderDocument, ReaderPosition } from "@/lib/book-types";
 import type { ReadingPositionMutation, ReadingReaderStateDTO } from "@/lib/types";
 import { validateReaderPosition } from "@/lib/reader/anchors";
 
-type Pending = { documentKey: string; revision: number; inFlight: ReadingPositionMutation | null; latest: ReaderPosition; updatedAt?: number };
+type Pending = { documentKey: string; revision: number; inFlight: ReadingPositionMutation | null; latest: ReaderPosition; updatedAt?: number; positions?: ReaderPosition[] };
 type Cache = { version: 1; entries: Record<string, Pending> };
 export type ReadingSaveStatus = "saved" | "saving" | "failed" | "conflict";
 export interface ReadingProgressView { position: ReaderPosition | null; status: ReadingSaveStatus; error: string }
@@ -13,6 +13,17 @@ interface Options {
   changed?: (view: ReadingProgressView) => void;
   delay?: (ms: number) => Promise<void>;
   ownerId?: string;
+  storageKey?: string;
+  validatePosition?: (value: unknown) => ReaderPosition | null;
+  preserveUnits?: boolean;
+}
+export function pendingReadingPositions(storage: Pick<Storage, "getItem"> | null, key: string, ownerId?: string): ReaderPosition[] {
+  try {
+    const cache = JSON.parse(storage?.getItem(key) ?? "null");
+    const entries = Object.entries(cache?.version === 1 ? cache.entries ?? {} : {}) as [string, Pending][];
+    const pending = (entries.find(([id]) => id === ownerId) ?? entries.sort((a, b) => (b[1].updatedAt ?? 0) - (a[1].updatedAt ?? 0))[0])?.[1];
+    return [pending?.latest, pending?.inFlight?.position, ...(Array.isArray(pending?.positions) ? pending.positions : [])].filter((position): position is ReaderPosition => !!position && typeof position.unitId === "string" && typeof position.documentKey === "string");
+  } catch { return []; }
 }
 export function equalReadingPosition(a: ReaderPosition | null, b: ReaderPosition | null): boolean {
   return a === b || !!a && !!b && a.documentKey === b.documentKey && a.unitId === b.unitId && a.blockId === b.blockId && a.offset === b.offset && a.viewportOffset === b.viewportOffset;
@@ -36,17 +47,19 @@ export class ReadingProgressController {
   private delay: (ms: number) => Promise<void>;
   private ownerId: string;
   private adopted: { id: string; value: string } | null = null;
+  private positions = new Map<string, ReaderPosition>();
 
   constructor(private options: Options) {
-    this.storageKey = `anilearn:reading-progress:${options.document.key}`;
+    this.storageKey = options.storageKey ?? `anilearn:reading-progress:${options.document.key}`;
     this.revision = options.initial.revision;
-    this.view = { position: validateReaderPosition(options.document, options.initial.position), status: "saved", error: "" };
+    this.view = { position: this.validate(options.initial.position), status: "saved", error: "" };
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     this.id = options.id ?? (() => crypto.randomUUID());
     this.ownerId = options.ownerId ?? this.id();
     this.delay = options.delay ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
     this.restore();
   }
+  private validate(value: unknown) { return this.options.validatePosition ? this.options.validatePosition(value) : validateReaderPosition(this.options.document, value); }
   private cache(): Cache {
     try {
       const value = JSON.parse(this.options.storage?.getItem(this.storageKey) ?? "null");
@@ -65,14 +78,24 @@ export class ReadingProgressController {
       const selected = entries.find(([id]) => id === this.ownerId) ?? entries.sort((a, b) => (b[1].updatedAt ?? 0) - (a[1].updatedAt ?? 0))[0];
       const raw = selected?.[1];
       if (!raw || raw.documentKey !== this.options.document.key || !Number.isSafeInteger(raw.revision) || raw.revision < 0) return;
-      const position = validateReaderPosition(this.options.document, raw.latest); if (!position) return;
+      const position = this.validate(raw.latest); if (!position) return;
       const flight = raw.inFlight;
-      if (flight && (!validateReaderPosition(this.options.document, flight.position) || flight.revision !== raw.revision ||
+      if (flight && (!this.validate(flight.position) || flight.revision !== raw.revision ||
         typeof flight.mutationId !== "string" || !/^[a-zA-Z0-9_-]{8,100}$/.test(flight.mutationId))) return;
       if (selected[0] !== this.ownerId) this.adopted = { id: selected[0], value: JSON.stringify(raw) };
       this.latest = position; this.view.position = position;
+      if (this.options.preserveUnits) {
+        for (const value of Array.isArray(raw.positions) ? raw.positions : [position]) {
+          const valid = this.validate(value); if (valid) this.positions.set(valid.unitId, valid);
+        }
+        this.positions.delete(position.unitId); this.positions.set(position.unitId, position);
+      }
       if (flight && this.options.initial.mutationId === flight.mutationId) {
-        if (equalReadingPosition(position, this.options.initial.position)) this.latest = null;
+        if (equalReadingPosition(this.positions.get(flight.position.unitId) ?? null, flight.position)) {
+          this.positions.delete(flight.position.unitId);
+          if (this.positions.size && equalReadingPosition(position, flight.position)) this.positions.set(position.unitId, position);
+        }
+        if (equalReadingPosition(position, this.options.initial.position) && !this.positions.size) this.latest = null;
       } else {
         this.inFlight = flight;
         if (raw.revision !== this.revision) this.view = { ...this.view, status: "conflict", error: "阅读位置已在其他窗口更新，本地位置已保留。" };
@@ -90,15 +113,17 @@ export class ReadingProgressController {
       }
       if (!this.latest) delete cache.entries[this.ownerId];
       else cache.entries[this.ownerId] = { documentKey: this.options.document.key,
-        revision: this.revision, inFlight: this.inFlight, latest: this.latest, updatedAt: Date.now() } satisfies Pending;
+        revision: this.revision, inFlight: this.inFlight, latest: this.latest, updatedAt: Date.now(), ...(this.options.preserveUnits ? { positions: [...this.positions.values()] } : {}) } satisfies Pending;
       if (Object.keys(cache.entries).length) this.options.storage?.setItem(this.storageKey, JSON.stringify(cache));
       else this.options.storage?.removeItem(this.storageKey);
     } catch { /* Keep the pending position in memory even if storage is full. */ }
   }
   update(position: ReaderPosition) {
-    const valid = validateReaderPosition(this.options.document, position); if (!valid) return;
+    const valid = this.validate(position); if (!valid) return;
     if (!this.detached) this.keepalive = false;
-    this.latest = valid; this.view.position = valid; this.persist();
+    this.latest = valid; this.view.position = valid;
+    if (this.options.preserveUnits) { this.positions.delete(valid.unitId); this.positions.set(valid.unitId, valid); }
+    this.persist();
     if (this.view.status === "conflict") { this.publish("conflict", this.view.error); return; }
     this.publish("saving");
     if (this.timer) clearTimeout(this.timer);
@@ -114,12 +139,12 @@ export class ReadingProgressController {
   }
   private async drain(): Promise<boolean> {
     while (this.latest) {
-      this.inFlight ??= { position: this.latest, revision: this.revision, mutationId: this.id() };
+      this.inFlight ??= { position: this.positions.values().next().value ?? this.latest, revision: this.revision, mutationId: this.id() };
       const payload = this.inFlight; this.persist(); this.publish("saving");
       let saved: ReadingReaderStateDTO | null = null;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const response = await this.fetcher(this.options.url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: this.keepalive });
+          const response = await this.fetcher(this.options.url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: this.keepalive, signal: AbortSignal.timeout(10000) });
           const data = await response.json() as ReadingReaderStateDTO & { error?: string; state?: ReadingReaderStateDTO };
           if (response.status === 409) { this.publish("conflict", data.error || "阅读位置已在其他窗口更新，本地位置已保留。"); return false; }
           if (!response.ok) {
@@ -136,7 +161,15 @@ export class ReadingProgressController {
       }
       if (!saved) return false;
       this.revision = saved.revision; this.inFlight = null;
-      if (equalReadingPosition(this.latest, payload.position)) this.latest = null;
+      const pending = this.positions.get(payload.position.unitId);
+      if (equalReadingPosition(pending ?? null, payload.position)) {
+        this.positions.delete(payload.position.unitId);
+        // A return to the same character can happen while its old request is in
+        // flight. Save it again after other pending chapters so the cloud's last
+        // position matches the user's latest navigation, even when values match.
+        if (pending && this.positions.size && equalReadingPosition(this.latest, payload.position)) this.positions.set(pending.unitId, pending);
+      }
+      if (this.options.preserveUnits ? !this.positions.size : equalReadingPosition(this.latest, payload.position)) this.latest = null;
       this.persist();
     }
     this.publish("saved"); return true;

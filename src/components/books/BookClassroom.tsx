@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { BookOpen, Check, FileText, LogOut, MessageSquare, NotebookPen, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
-import type { BookDTO, BookSessionDTO, BookMessage, BookPersonalNote, BookTurnRequest, BookTurnEvent, ReaderDocument, ReaderAnchor, ReaderPosition, ReaderSelectionTask, TutorDTO } from "@/lib/types";
+import type { BookDTO, BookSessionDTO, BookMessage, BookPersonalNote, BookTurnRequest, BookTurnEvent, ReaderDocument, ReaderAnchor, ReaderPosition, ReaderSelectionTask, ReaderHandle, BookReaderStateDTO, BookBookmarkDTO, TutorDTO } from "@/lib/types";
 import Reader from "@/components/reader/Reader";
 import ReadingWorkspace from "@/components/reader/ReadingWorkspace";
 import { ClassroomComposer } from "@/components/ClassroomComposer";
@@ -14,7 +14,9 @@ import { useSpeechAudioController } from "@/lib/client/speech-audio";
 import { revealTutorMessage } from "@/lib/client/tutor-playback";
 import { tokenizeForReveal } from "@/lib/text";
 import { anchorQuote } from "@/lib/reader/anchors";
-import { currentReaderPosition } from "@/lib/reader/dom-selection";
+import { validateReaderPosition } from "@/lib/reader/anchors";
+import { useBookProgress } from "@/lib/client/use-book-progress";
+import { useReaderBookmarks } from "@/lib/client/use-reading-progress";
 
 const FOCI = { literary: [{ id: "content", label: "情节与人物" }, { id: "structure", label: "叙事结构" }, { id: "language", label: "语言手法" }, { id: "theme", label: "主题" }, { id: "emotion", label: "情感表达" }],
   thought: [{ id: "concepts", label: "核心概念" }, { id: "argument", label: "论证过程" }, { id: "implications", label: "思想推演" }],
@@ -23,7 +25,7 @@ type Progress = { status: string; completedChunks: number; totalChunks: number; 
 const EMPTY_PROGRESS: Progress = { status: "idle", completedChunks: 0, totalChunks: 0, running: false, resumable: false, error: null };
 type Payload = { session: BookSessionDTO; book: BookDTO; document: ReaderDocument; tutor: TutorDTO; messages: BookMessage[]; notes: BookPersonalNote[] };
 
-export default function BookClassroom(props: Payload & { llmReady: boolean; analysisReady: boolean; ttsReady: boolean }) {
+export default function BookClassroom(props: Payload & { initialReaderState: BookReaderStateDTO; initialBookmarks: BookBookmarkDTO[]; llmReady: boolean; analysisReady: boolean; ttsReady: boolean }) {
   const { book, tutor } = props;
   const [session, setSession] = useState(props.session); const sessionRef = useRef(props.session);
   const [document, setDocument] = useState(props.document); const documentRef = useRef(props.document);
@@ -44,8 +46,20 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
   const queue = useRef<BookTurnRequest[]>([]); const running = useRef(false); const disposed = useRef(false); const optimistic = useRef(-1);
   const request = useRef<AbortController | null>(null); const playback = useRef<AbortController | null>(null);
   const { controllerRef: speechAudioRef, getController: getSpeechAudio } = useSpeechAudioController();
-  const chatEnd = useRef<HTMLDivElement>(null); const bookmarkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chatEnd = useRef<HTMLDivElement>(null);
   const readerContainer = useRef<HTMLDivElement>(null);
+  const readerHandle = useRef<ReaderHandle | null>(null);
+  const readingProgress = useBookProgress(props.document, props.session.id, props.initialReaderState);
+  const { documents: readerDocuments, chapterPositions, loadDocument, update: updateReaderPosition } = readingProgress;
+  const savedBookmarks = useReaderBookmarks(`/api/book-sessions/${props.session.id}/bookmarks`, props.initialBookmarks);
+  const [navigation, setNavigation] = useState<{ id: number; position: ReaderPosition } | null>(null);
+  const [sourceReady, setSourceReady] = useState(false);
+  const resumeStarted = useRef(false);
+  const navigationEpoch = useRef(0);
+  const navigating = useRef(false);
+  const needsChapterSync = useRef(false);
+  const navigationChain = useRef<Promise<void>>(Promise.resolve());
+  const turnPositions = useRef(new Map<string, ReaderPosition | null>());
   const bookmarkChain = useRef<Promise<void>>(Promise.resolve());
   const positionRef = useRef<ReaderPosition | null>(props.session.chapters.find(chapter => chapter.chapterId === props.document.unitId)?.position ?? null);
   const noteChains = useRef(new Map<string, Promise<void>>()); const notePending = useRef(new Map<string, string>());
@@ -63,8 +77,9 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
   useEffect(() => { chatEnd.current?.scrollIntoView({ block: "end" }); }, [messages.length, typing]);
   useEffect(() => {
     disposed.current = false;
+    const navigationCounter = navigationEpoch;
     return () => { disposed.current = true; queue.current = []; request.current?.abort(); playback.current?.abort();
-      getSpeechAudio().cancelPending(); speechAudioRef.current?.dispose(); speechAudioRef.current = null; if (bookmarkTimer.current) clearTimeout(bookmarkTimer.current); };
+      getSpeechAudio().cancelPending(); speechAudioRef.current?.dispose(); speechAudioRef.current = null; navigationCounter.current++; resumeStarted.current = false; };
   }, [getSpeechAudio, speechAudioRef]);
 
   useEffect(() => {
@@ -94,14 +109,11 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
     void poll(); return () => { active = false; if (timer) clearTimeout(timer); };
   }, [tab, session.id, summaryProgress.running, replaceSession]);
 
-  async function api(path: string, body: unknown, method = "POST", signal?: AbortSignal) {
-    const response = await fetch(`/api/book-sessions/${sessionRef.current.id}${path}`, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal }); const data = await response.json();
+  const api = useCallback(async (path: string, body: unknown, method = "POST", signal?: AbortSignal) => {
+    const response = await fetch(`/api/book-sessions/${sessionRef.current.id}${path}`, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: signal ?? AbortSignal.timeout(15000) }); const data = await response.json();
     if (!response.ok) throw new Error(data.error || "操作失败，请稍后重试。"); return data;
-  }
-  function visibleReadingPosition() {
-    const scroll = readerContainer.current?.querySelector<HTMLElement>("[aria-label='阅读正文']");
-    return scroll && scroll.getBoundingClientRect().height > 0 ? currentReaderPosition(scroll, documentRef.current) : null;
-  }
+  }, []);
+  function visibleReadingPosition() { return readerHandle.current?.getPosition() ?? null; }
   async function savePosition(position: ReaderPosition, required = false, signal?: AbortSignal): Promise<void> {
     const save = async () => {
       signal?.throwIfAborted();
@@ -143,42 +155,92 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
   }
   async function flushBookmarkForTurn(next: BookTurnRequest, signal: AbortSignal) {
     if (next.phase !== "free_reading" || next.anchor || next.selectionTask || next.intent) return;
-    if (!inspectingRef.current && documentRef.current.unitId === next.chapterId) {
-      const visible = visibleReadingPosition();
-      if (visible) positionRef.current = visible;
-    }
-    const position = positionRef.current;
-    if (!position || position.unitId !== next.chapterId) return;
-    if (bookmarkTimer.current) { clearTimeout(bookmarkTimer.current); bookmarkTimer.current = null; }
-    await savePosition(position, true, signal);
+    const position = turnPositions.current.get(next.requestId);
+    if (position?.unitId === next.chapterId) await savePosition(position, true, signal);
   }
-  async function changeChapter(chapterId: string, inspect = false) {
-    if (changing) return;
-    setChanging(true); setError("");
-    try {
-      if (!inspect && positionRef.current && positionRef.current.unitId === sessionRef.current.currentChapterId && !inspectingRef.current) await savePosition(positionRef.current);
-      const response = inspect || chapterId === sessionRef.current.currentChapterId
-        ? await fetch(`/api/book-sessions/${sessionRef.current.id}?chapterId=${encodeURIComponent(chapterId)}`, { cache: "no-store" }) : null;
-      const data: Payload = response ? await response.json() : await api("", { action: "chapter", versionId: sessionRef.current.versionId, chapterId }, "PATCH");
-      if (response && !response.ok) throw new Error((data as unknown as { error: string }).error || "无法加载章节。");
-      documentRef.current = data.document; setDocument(data.document); setTab("source");
-      if (!inspect) { replaceSession(data.session); setMessages(data.messages); setAttachedNotes([]); setPendingAnchor(null); setInspectAnchor(null); setAnalysis(EMPTY_PROGRESS); positionRef.current = data.session.chapters.find(chapter => chapter.chapterId === chapterId)?.position ?? null; }
-      replaceNotes(data.notes); setDrafts(previous => ({ ...previous, ...Object.fromEntries(data.notes.filter(note => previous[note.id] === undefined).map(note => [note.id, note.content])) }));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "章节加载失败。"); }
-    finally { setChanging(false); }
-  }
+  const changeChapter = useCallback(async (chapterId: string, inspect = false, target?: ReaderPosition, save = true, head = false) => {
+    if (running.current) { setError("请先等待导师回复完成，或停止回复后切换章节。"); return; }
+    const epoch = ++navigationEpoch.current;
+    navigating.current = true; setChanging(true); setError("");
+    const current = () => !disposed.current && epoch === navigationEpoch.current;
+    // Load concurrently, but serialize chapter mutations, including rollback of
+    // an obsolete activation. A failed load never changes the displayed chapter.
+    const loading = loadDocument(chapterId).then(value => ({ value, error: null }), error => ({ value: null, error }));
+    const task = navigationChain.current.catch(() => undefined).then(async () => {
+      if (!current()) return;
+      const loaded = await loading;
+      if (!current()) return;
+      if (!loaded.value) throw loaded.error;
+      const document = loaded.value;
+      const requested = target ?? (!head ? chapterPositions.current[chapterId] : null);
+      const first = document.blocks[0];
+      const position = requested ? validateReaderPosition(document, requested) : first ? { documentKey: document.key, unitId: chapterId, blockId: first.id, offset: 0, viewportOffset: 0 } : null;
+      if (requested && !position) throw new Error("阅读位置无效，请重新选择章节。");
+      const origin = sessionRef.current.currentChapterId;
+      if (!inspect && !needsChapterSync.current && chapterId === origin && chapterId === documentRef.current.unitId) {
+        inspectingRef.current = false; positionRef.current = position;
+        setInspectAnchor(null); setTab("source"); setSourceReady(true);
+        if (position) { setNavigation({ id: epoch, position }); if (save) updateReaderPosition(position); }
+        return;
+      }
+      let activated = false;
+      try {
+        const response = await fetch(`/api/book-sessions/${sessionRef.current.id}?chapterId=${encodeURIComponent(chapterId)}`, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+        let data: Payload = await response.json();
+        if (!response.ok) throw new Error((data as unknown as { error: string }).error || "章节加载失败。");
+        if (!current()) return;
+        if (!inspect && (needsChapterSync.current || chapterId !== origin)) {
+          activated = true;
+          data = await api("", { action: "chapter", versionId: sessionRef.current.versionId, chapterId }, "PATCH");
+        }
+        if (!current()) {
+          if (activated) {
+            needsChapterSync.current = true;
+            await api("", { action: "chapter", versionId: sessionRef.current.versionId, chapterId: origin }, "PATCH");
+            activated = false; needsChapterSync.current = false;
+          }
+          return;
+        }
+        if (data.document?.key !== document.key || data.document.unitId !== chapterId || position && !validateReaderPosition(data.document, position)) throw new Error("章节原文与目标位置不匹配，请重试。");
+        readerDocuments.current.set(chapterId, data.document);
+        documentRef.current = data.document; setDocument(data.document); setTab("source");
+        if (!inspect) {
+          needsChapterSync.current = false;
+          replaceSession(data.session); setMessages(data.messages); setAttachedNotes([]); setPendingAnchor(null); setInspectAnchor(null); setAnalysis(EMPTY_PROGRESS);
+          inspectingRef.current = false; positionRef.current = position;
+          if (position) { setNavigation({ id: epoch, position }); if (save) updateReaderPosition(position); }
+          setSourceReady(true);
+        }
+        replaceNotes(data.notes); setDrafts(previous => ({ ...previous, ...Object.fromEntries(data.notes.filter(note => previous[note.id] === undefined).map(note => [note.id, note.content])) }));
+      } catch (cause) {
+        if (activated) {
+          needsChapterSync.current = true;
+          try { await api("", { action: "chapter", versionId: sessionRef.current.versionId, chapterId: origin }, "PATCH"); needsChapterSync.current = false; }
+          catch { throw new Error("章节同步失败，原阅读位置已保留，请重新选择章节或刷新后重试。"); }
+        }
+        throw cause;
+      }
+    });
+    navigationChain.current = task;
+    try { await task; }
+    catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : "章节加载失败，请重试。"); }
+    finally { if (current()) { navigating.current = false; setChanging(false); } }
+  }, [api, chapterPositions, loadDocument, readerDocuments, replaceNotes, replaceSession, updateReaderPosition]);
+  useEffect(() => {
+    if (!readingProgress.ready || resumeStarted.current) return;
+    resumeStarted.current = true;
+    const target = readingProgress.entryPosition;
+    void changeChapter(target?.unitId ?? props.document.unitId, false, target ?? undefined, false);
+  }, [readingProgress.ready, readingProgress.entryPosition, props.document.unitId, changeChapter]);
   function onPosition(position: ReaderPosition) {
     if (inspectingRef.current) return;
-    positionRef.current = position;
     if (position.unitId !== sessionRef.current.currentChapterId) {
-      void api("", { action: "chapter", versionId: sessionRef.current.versionId, chapterId: position.unitId }, "PATCH").then((data: Payload) => { replaceSession(data.session); setMessages(data.messages); return savePosition(position); }).catch(cause => setError(cause.message));
-      return;
+      void changeChapter(position.unitId, false, position); return;
     }
-    if (bookmarkTimer.current) clearTimeout(bookmarkTimer.current);
-    bookmarkTimer.current = setTimeout(() => void savePosition(position), 300);
+    positionRef.current = position; updateReaderPosition(position);
   }
   async function inspectQuote(anchor: ReaderAnchor) {
-    setInspectAnchor(anchor); setTab("source"); setTutorOpen(false);
+    setInspectAnchor({ ...anchor }); setTab("source"); setTutorOpen(false);
   }
   function append(message: BookMessage) { setMessages(all => all.some(item => item.id === message.id) ? all : [...all, message]); }
   async function play(message: BookMessage) {
@@ -221,8 +283,13 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
     } finally { running.current = false; if (!disposed.current) setBusy(false); }
   }
   function enqueue(value: Partial<BookTurnRequest>) {
+    if (navigating.current || !sourceReady) { setError("请等待章节恢复完成后再提问。"); return; }
     const current = sessionRef.current; const chapter = current.chapters.find(item => item.chapterId === current.currentChapterId)!;
     const next: BookTurnRequest = { requestId: crypto.randomUUID(), versionId: current.versionId, chapterId: current.currentChapterId, phase: chapter.learning.phase, stateRevision: chapter.learning.stateRevision, focus: chapter.learning.currentFocus, ...value };
+    if (!turnPositions.current.has(next.requestId)) {
+      const position = !inspectingRef.current && documentRef.current.unitId === next.chapterId ? visibleReadingPosition() : positionRef.current;
+      turnPositions.current.set(next.requestId, position);
+    }
     queue.current.push(next); setLastRequest(next); setTutorOpen(true); if (running.current) stop(); void runQueue();
   }
   async function replayMessage(message: BookMessage) { if (running.current || mutedRef.current) return; running.current = true; setBusy(true); getSpeechAudio().retryFailed(`book:${sessionRef.current.id}:${message.id}`); try { await play(message); } finally { running.current = false; setBusy(false); void runQueue(); } }
@@ -271,22 +338,29 @@ export default function BookClassroom(props: Payload & { llmReady: boolean; anal
     {!!message.attachments.length && <div className="mt-2 flex flex-wrap gap-2">{message.attachments.map((url, index) => <a key={index} href={url} target="_blank" rel="noreferrer"><Image src={url} alt={`提问图片${index + 1}`} width={280} height={220} unoptimized className="max-h-40 max-w-36 object-contain" /></a>)}</div>}
     {message.role === "tutor" && message.speech && !muted && <button aria-label="重播语音" disabled={busy} className="mt-2" onClick={() => void replayMessage(message)}><Volume2 size={14} /></button>}
   </div>)}{!messages.length && <p className="border-l-2 pl-3 text-sm leading-7 text-neutral-500">先安静读书。遇到词句问题可以选中文字；导师会在你主动提问后回答。</p>}<div ref={chatEnd} /></div>{pendingAnchor && <div className="mx-3 border-l-2 p-2 text-xs">引用：{anchorQuote(pendingAnchor)}<button className="ml-2 underline" onClick={() => setPendingAnchor(null)}>取消</button></div>}{!!attachedNotes.length && <p className="px-4 py-2 text-xs">附加笔记：{attachedNotes.join("、")}<button className="ml-2 underline" onClick={() => setAttachedNotes([])}>清除</button></p>}
-    <ClassroomComposer value={input} onValueChange={setInput} images={images} onAddImages={addAttachments} onRemoveImage={removeAttachment} imageProcessing={attachmentsProcessing} attachmentError={attachmentError} onClearAttachmentError={clearAttachmentError} canSend={props.llmReady} busy={busy} placeholder="选中文字，或向导师提问…" quickActions={[]} onStop={stop} onHint={() => enqueue({ text: state.learning.phase === "free_reading" ? "请给我一点理解当前原文的提示。" : "请围绕当前导读角度给一个提示。" })} onSend={(text, attachments) => { enqueue({ text, images: attachments, anchor: pendingAnchor, noteIds: attachedNotes }); setInput(""); setPendingAnchor(null); setAttachedNotes([]); clearAttachments(); }} />
+    <ClassroomComposer value={input} onValueChange={setInput} images={images} onAddImages={addAttachments} onRemoveImage={removeAttachment} imageProcessing={attachmentsProcessing} attachmentError={attachmentError} onClearAttachmentError={clearAttachmentError} canSend={props.llmReady && sourceReady && !changing} busy={busy} placeholder="选中文字，或向导师提问…" quickActions={[]} onStop={stop} onHint={() => enqueue({ text: state.learning.phase === "free_reading" ? "请给我一点理解当前原文的提示。" : "请围绕当前导读角度给一个提示。" })} onSend={(text, attachments) => { enqueue({ text, images: attachments, anchor: pendingAnchor, noteIds: attachedNotes }); setInput(""); setPendingAnchor(null); setAttachedNotes([]); clearAttachments(); }} />
   </section>;
 
   return <div className="flex h-dvh flex-col overflow-hidden bg-[#fcfcfa] text-neutral-900"><header className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b-2 border-neutral-900 px-4 py-2"><span className="hidden font-serif font-bold sm:inline">AniLearn</span><span className="w-full min-w-0 truncate text-sm font-semibold sm:w-auto sm:flex-1">{book.title}</span><Link href={`/books/${book.id}`} className="flex items-center gap-1 text-xs"><BookOpen size={15} />返回典籍</Link><button aria-label={muted ? "开启语音" : "静音"} onClick={() => { if (!muted) playback.current?.abort(); setMuted(!muted); }}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button><select aria-label="语速" value={rate} className="bg-transparent text-xs" onChange={event => setRate(Number(event.target.value))}><option value={1}>1x</option><option value={1.25}>1.25x</option><option value={1.5}>1.5x</option></select><Link href="/books" className="flex items-center gap-1 text-xs"><LogOut size={15} />退出阅读</Link></header>
     {(error || attachmentError) && <div role="alert" className="flex shrink-0 items-center gap-3 border-b bg-red-50 px-4 py-2 text-xs text-red-700">{error || attachmentError}{lastRequest && error && <button className="underline" onClick={() => enqueue(lastRequest)}>重试提问</button>}<button className="ml-auto" onClick={() => setError("")}>关闭</button></div>}
     <ReadingWorkspace tutor={tutorPanel} open={tutorOpen} onOpenChange={setTutorOpen}><div className="flex min-h-0 flex-1 flex-col"><nav aria-label="典籍阅读内容" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2">{([{ id: "source", label: "原文", icon: BookOpen }, { id: "notes", label: "我的笔记", icon: NotebookPen }, { id: "analysis", label: "本章导读", icon: MessageSquare }, { id: "summary", label: "全书总结", icon: FileText }] as const).map(item => <button key={item.id} aria-pressed={tab === item.id} className={`flex items-center gap-1 px-3 py-2 text-xs ${tab === item.id ? "bg-neutral-900 text-white" : ""}`} onClick={() => setTab(item.id)}><item.icon size={14} />{item.label}</button>)}</nav>
       <div className={`min-h-0 flex-1 ${tab === "source" ? "flex flex-col" : "overflow-y-auto p-5 sm:p-8"}`}>
-        <div ref={readerContainer} className={tab === "source" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-4 py-2 text-xs"><span>{document.unitId === session.currentChapterId ? state.learning.phase === "free_reading" ? "自由阅读" : "本章导读" : "临时查看其他章节"}{displayed?.learning.readingConfirmedAt ? " · 已确认读完" : ""}</span>{document.unitId === session.currentChapterId && <div className="flex gap-3"><button disabled={busy || changing} className="underline disabled:opacity-40" onClick={() => void changeLearning("confirm_reading")}>确认已读完本章</button><button disabled={busy || changing || !props.analysisReady} className="underline disabled:opacity-40" onClick={() => void startAnalysis()}><Play size={12} className="mr-1 inline" />已读完，开始导读</button></div>}</div>
-          <Reader document={document} initialPosition={displayed?.position} inspectAnchor={inspectAnchor} annotations={notes.filter(note => note.kind === "annotation" && note.anchor?.unitId === document.unitId).map(note => ({ id: note.id, anchor: note.anchor!, content: drafts[note.id] ?? note.content }))} onPositionChange={onPosition} onUnitChange={(id, inspect) => void changeChapter(id, inspect)} onInspectionChange={value => { if (value && !inspectingRef.current && documentRef.current.unitId === sessionRef.current.currentChapterId) { const position = visibleReadingPosition(); if (position) positionRef.current = position; } inspectingRef.current = value; }} onQuestion={question} onSelectionTask={selectionTask} onAnnotation={annotate} />
+        <div ref={readerContainer} className={tab === "source" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-4 py-2 text-xs"><span>{document.unitId === session.currentChapterId ? state.learning.phase === "free_reading" ? "自由阅读" : "本章导读" : "临时查看其他章节"}{displayed?.learning.readingConfirmedAt ? " · 已确认读完" : ""}</span>{document.unitId === session.currentChapterId && <div className="flex gap-3"><button disabled={busy || changing || !sourceReady} className="underline disabled:opacity-40" onClick={() => void changeLearning("confirm_reading")}>确认已读完本章</button><button disabled={busy || changing || !sourceReady || !props.analysisReady} className="underline disabled:opacity-40" onClick={() => void startAnalysis()}><Play size={12} className="mr-1 inline" />已读完，开始导读</button></div>}</div>
+          {!sourceReady ? <div role="status" className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-sm text-neutral-500">{error || readingProgress.error || "正在恢复阅读位置…"}{(error || readingProgress.status === "failed") && <button className="underline" onClick={() => { if (!readingProgress.ready) void readingProgress.retry(); else void changeChapter(readingProgress.entryPosition?.unitId ?? props.document.unitId, false, readingProgress.entryPosition ?? undefined, false); }}>重试恢复</button>}</div> : <Reader document={document} layout="paged" contentKind="book" handleRef={readerHandle} navigation={navigation}
+            initialPosition={navigation?.position.unitId === document.unitId ? navigation.position : chapterPositions.current[document.unitId] ?? null}
+            entryPosition={readingProgress.entryPosition} bookmarks={savedBookmarks.bookmarks}
+            onBookmarkCreate={savedBookmarks.create} onBookmarkRename={savedBookmarks.rename} onBookmarkDelete={savedBookmarks.remove}
+            onNavigatePosition={(position, save) => void changeChapter(position.unitId, false, position, save)}
+            onStart={() => { const first = document.units.find(unit => unit.role === "main" && (unit.blockCount ?? 0) > 0) ?? document.units.find(unit => (unit.blockCount ?? 0) > 0); if (first) void changeChapter(first.id, false, undefined, true, true); }}
+            status={<span role="status" title={readingProgress.error}>{readingProgress.status === "saving" ? "位置保存中…" : readingProgress.status === "saved" ? "位置已保存" : readingProgress.status === "conflict" ? "位置有冲突，本地已保留" : "位置保存失败，本地已保留"}{(readingProgress.status === "failed" || readingProgress.status === "conflict") && <button onClick={() => void readingProgress.retry()}>{readingProgress.status === "conflict" ? "保存当前位置" : "重试"}</button>}</span>}
+            inspectAnchor={inspectAnchor} annotations={notes.filter(note => note.kind === "annotation" && note.anchor?.unitId === document.unitId).map(note => ({ id: note.id, anchor: note.anchor!, content: drafts[note.id] ?? note.content }))} onPositionChange={onPosition} onUnitChange={(id, inspect) => void changeChapter(id, inspect)} onInspectionChange={value => { if (value && !inspectingRef.current && documentRef.current.unitId === sessionRef.current.currentChapterId) { const position = visibleReadingPosition(); if (position) positionRef.current = position; } inspectingRef.current = value; }} onQuestion={question} onSelectionTask={selectionTask} onAnnotation={annotate} />}
         </div>
         {tab === "notes" && <div className="mx-auto max-w-3xl space-y-6"><div className="flex justify-between"><h2 className="text-xl font-semibold">我的阅读笔记</h2><span role="status" className="text-xs text-neutral-500">{noteStatus}</span></div><p className="text-xs text-neutral-500">笔记属于这一版本，同一本书换导师时继续保留；全书笔记只有主动附加时才传给导师。</p>
           {([{ kind: "chapter", label: "本章笔记", note: chapterNote }, { kind: "book", label: "全书笔记", note: bookNote }] as const).map(item => { const key = item.note ? String(item.note.id) : item.kind === "book" ? "book" : `chapter-${document.unitId}`; return <section key={item.kind}><label className="block text-sm font-medium">{item.label}<textarea aria-label={item.label} className="mt-2 min-h-40 w-full border bg-white p-4 text-sm leading-7" value={drafts[key] ?? item.note?.content ?? ""} onChange={event => { setDrafts(all => ({ ...all, [key]: event.target.value })); setNoteStatus("草稿未保存"); }} /></label><div className="mt-2 flex gap-3"><button className="border px-3 py-1.5 text-xs" onClick={() => void saveNotebook(item.kind, drafts[key] ?? item.note?.content ?? "", document.unitId)}>保存{item.label}</button>{item.note && <button className="text-xs underline" onClick={() => { setAttachedNotes(all => [...new Set([...all, item.note!.id])]); setTutorOpen(true); }}>附到提问</button>}</div></section>; })}
           <section className="space-y-4 border-t pt-5"><h3 className="font-semibold">原文批注</h3>{notes.filter(note => note.kind === "annotation").map(note => <div key={note.id} className="space-y-2 border bg-white p-4"><button className="border-l-2 pl-3 text-left text-xs text-neutral-500" onClick={() => note.anchor && void inspectQuote(note.anchor)}>{note.anchor ? anchorQuote(note.anchor) : "原文选区"}</button><textarea aria-label="编辑原文批注" className="min-h-24 w-full border p-3 text-sm" value={drafts[note.id] ?? note.content} onChange={event => setDrafts(all => ({ ...all, [note.id]: event.target.value }))} /><div className="flex gap-3 text-xs"><button className="underline" onClick={() => void saveEditedNote(note, drafts[note.id] ?? note.content)}>保存批注</button><button className="underline" onClick={() => void deleteNote(note)}>删除批注</button><span role="status" className="text-red-700">{noteErrors[note.id]}</span></div></div>)}</section>
         </div>}
-        {tab === "analysis" && <div className="mx-auto max-w-3xl space-y-6"><h2 className="text-xl font-semibold">本章导读 · {document.units.find(unit => unit.id === session.currentChapterId)?.title}</h2>{state.learning.phase === "free_reading" ? <div className="border p-5"><p className="text-sm">先读完本章，再一起分析。可以跳章阅读，导读进度分别保留。</p><button disabled={!props.analysisReady || changing || busy} className="ink-button mt-4 px-4 py-2 disabled:opacity-40" onClick={() => void startAnalysis()}><Play size={15} />已读完本章，开始导读</button></div> : <>{(analysis.status === "interrupted" || analysis.status === "failed" || analysis.status !== "ready" && state.analysis.status !== "ready") ? <div role="status" className="space-y-2 border p-5"><p>{analysis.running ? "导师正在整理本章资料" : "本章资料尚未准备完成"}</p><p className="text-xs text-neutral-500">已整理 {analysis.completedChunks}/{analysis.totalChunks} 个片段</p>{analysis.error && <p className="text-sm text-red-700">{analysis.error}</p>}{analysis.resumable && <button disabled={changing} className="border px-3 py-2 text-sm" onClick={() => void startAnalysis(true)}><RotateCcw className="mr-1 inline" size={14} />续接本章准备</button>}</div> : <><div className="flex flex-wrap gap-2">{foci.map(focus => <button key={focus.id} disabled={busy || changing} className={`border px-3 py-2 text-sm ${state.learning.currentFocus === focus.id ? "bg-neutral-900 text-white" : ""}`} onClick={() => void changeLearning("set_focus", { focus: focus.id })}>{focus.label} · {state.learning.focusStatus[focus.id] === "confirmed" ? "已确认" : state.learning.focusStatus[focus.id] === "in_progress" ? "进行中" : "未开始"}</button>)}</div>{state.learning.currentFocus ? <section className="space-y-4 border p-5"><h3 className="font-semibold">{currentFocus?.label}</h3>{state.learning.analysisNotes[state.learning.currentFocus] && <Markdown className="md" content={state.learning.analysisNotes[state.learning.currentFocus] ?? ""} />}<div className="flex flex-wrap gap-2"><button disabled={busy || !props.llmReady} className="ink-button px-4 py-2 disabled:opacity-40" onClick={() => enqueue({ text: `请围绕「${currentFocus?.label}」提出一个具体问题，引导我分析本章。` })}>开始讨论</button><button disabled={busy || !props.llmReady} className="border px-4 py-2 text-sm" onClick={() => enqueue({ text: `请直接讲解本章的「${currentFocus?.label}」，结合原文证据。` })}>直接讲解</button><button disabled={busy || changing || !state.learning.analysisNotes[state.learning.currentFocus]} className="ml-auto border px-4 py-2 text-sm disabled:opacity-40" onClick={() => void changeLearning("confirm_focus")}><Check className="mr-1 inline" size={14} />这个角度已理解</button></div></section> : <section className="space-y-4 border p-5"><h3 className="font-semibold">全部角度已确认</h3>{state.learning.summary ? <><Markdown content={state.learning.summary} className="md" />{state.learning.completedAt ? <div className="space-y-3"><p role="status" className="text-sm font-semibold">本章导读已完成</p>{nextChapter && <button disabled={busy || changing} className="border px-4 py-2 text-sm" onClick={() => void changeChapter(nextChapter.id)}>进入下一章</button>}</div> : <button disabled={busy || changing} className="ink-button px-4 py-2" onClick={() => void changeLearning("complete_analysis")}><Check size={15} />明确完成本章</button>}</> : <button disabled={busy || !props.llmReady} className="ink-button px-4 py-2" onClick={() => enqueue({ intent: "chapter_summary" })}>生成本章总结</button>}</section>}</>}
-          <button disabled={busy || changing} className="text-sm underline" onClick={() => { void changeLearning("return_to_reading"); setTab("source"); }}>回到自由阅读</button></>}</div>}
+        {tab === "analysis" && <div className="mx-auto max-w-3xl space-y-6"><h2 className="text-xl font-semibold">本章导读 · {document.units.find(unit => unit.id === session.currentChapterId)?.title}</h2>{state.learning.phase === "free_reading" ? <div className="border p-5"><p className="text-sm">先读完本章，再一起分析。可以跳章阅读，导读进度分别保留。</p><button disabled={!props.analysisReady || changing || busy} className="ink-button mt-4 px-4 py-2 disabled:opacity-40" onClick={() => void startAnalysis()}><Play size={15} />已读完本章，开始导读</button></div> : <>{(analysis.status === "interrupted" || analysis.status === "failed" || analysis.status !== "ready" && state.analysis.status !== "ready") ? <div role="status" className="space-y-2 border p-5"><p>{analysis.running ? "导师正在整理本章资料" : "本章资料尚未准备完成"}</p><p className="text-xs text-neutral-500">已整理 {analysis.completedChunks}/{analysis.totalChunks} 个片段</p>{analysis.error && <p className="text-sm text-red-700">{analysis.error}</p>}{analysis.resumable && <button disabled={changing} className="border px-3 py-2 text-sm" onClick={() => void startAnalysis(true)}><RotateCcw className="mr-1 inline" size={14} />续接本章准备</button>}</div> : <><div className="flex flex-wrap gap-2">{foci.map(focus => <button key={focus.id} disabled={busy || changing || !sourceReady} className={`border px-3 py-2 text-sm ${state.learning.currentFocus === focus.id ? "bg-neutral-900 text-white" : ""}`} onClick={() => void changeLearning("set_focus", { focus: focus.id })}>{focus.label} · {state.learning.focusStatus[focus.id] === "confirmed" ? "已确认" : state.learning.focusStatus[focus.id] === "in_progress" ? "进行中" : "未开始"}</button>)}</div>{state.learning.currentFocus ? <section className="space-y-4 border p-5"><h3 className="font-semibold">{currentFocus?.label}</h3>{state.learning.analysisNotes[state.learning.currentFocus] && <Markdown className="md" content={state.learning.analysisNotes[state.learning.currentFocus] ?? ""} />}<div className="flex flex-wrap gap-2"><button disabled={busy || !props.llmReady} className="ink-button px-4 py-2 disabled:opacity-40" onClick={() => enqueue({ text: `请围绕「${currentFocus?.label}」提出一个具体问题，引导我分析本章。` })}>开始讨论</button><button disabled={busy || !props.llmReady} className="border px-4 py-2 text-sm" onClick={() => enqueue({ text: `请直接讲解本章的「${currentFocus?.label}」，结合原文证据。` })}>直接讲解</button><button disabled={busy || changing || !state.learning.analysisNotes[state.learning.currentFocus]} className="ml-auto border px-4 py-2 text-sm disabled:opacity-40" onClick={() => void changeLearning("confirm_focus")}><Check className="mr-1 inline" size={14} />这个角度已理解</button></div></section> : <section className="space-y-4 border p-5"><h3 className="font-semibold">全部角度已确认</h3>{state.learning.summary ? <><Markdown content={state.learning.summary} className="md" />{state.learning.completedAt ? <div className="space-y-3"><p role="status" className="text-sm font-semibold">本章导读已完成</p>{nextChapter && <button disabled={busy || changing || !sourceReady} className="border px-4 py-2 text-sm" onClick={() => void changeChapter(nextChapter.id)}>进入下一章</button>}</div> : <button disabled={busy || changing || !sourceReady} className="ink-button px-4 py-2" onClick={() => void changeLearning("complete_analysis")}><Check size={15} />明确完成本章</button>}</> : <button disabled={busy || !props.llmReady} className="ink-button px-4 py-2" onClick={() => enqueue({ intent: "chapter_summary" })}>生成本章总结</button>}</section>}</>}
+          <button disabled={busy || changing || !sourceReady} className="text-sm underline" onClick={() => { void changeLearning("return_to_reading"); setTab("source"); }}>回到自由阅读</button></>}</div>}
         {tab === "summary" && <div className="mx-auto max-w-3xl space-y-5"><h2 className="text-xl font-semibold">全书总结</h2><p className="text-sm text-neutral-600">确认已读完全部正文主章后，整理全书结构与思想。每章导师导读可以自行选择。</p>{!canSummary && <p role="status" className="border p-4 text-sm">尚有正文主章未确认读完。请回到对应章节明确确认。</p>}{summaryProgress.running && <div role="status" className="border p-4 text-sm">正在准备全书资料 · {summaryProgress.completedChunks}/{summaryProgress.totalChunks} 章</div>}{summaryProgress.error && <p className="text-sm text-red-700">{summaryProgress.error}</p>}{session.summary ? <Markdown content={session.summary} className="md" /> : <button disabled={!canSummary || changing || summaryProgress.running || !props.analysisReady} className="ink-button px-4 py-2 disabled:opacity-40" onClick={() => void startSummary(summaryProgress.resumable)}>{summaryProgress.resumable ? "续接全书总结" : "生成全书总结"}</button>}</div>}
       </div></div></ReadingWorkspace>
   </div>;

@@ -47,7 +47,7 @@ test("skipped groups with stale in-viewport rectangles never replace the actuall
 
 test("layout changes retain one character through rapid typography, banner removal, resize and late font layout", () => {
   const slots: any[] = []; let cursor = 0; const effects: (() => void)[] = []; const layout: (() => void)[] = [];
-  const same = (a: any[], b: any[]) => a?.length === b?.length && a.every((value, index) => value === b[index]);
+  const same = (a: any[], b: any[]) => !!a && !!b && a.length === b.length && a.every((value, index) => value === b[index]);
   const effect = (callback: () => void, dependencies: any[], queue: (() => void)[]) => {
     const id = cursor++; if (!slots[id] || !same(slots[id].dependencies, dependencies)) {
       slots[id]?.cleanup?.(); slots[id] = { dependencies }; queue.push(() => { slots[id].cleanup = callback(); });

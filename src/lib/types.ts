@@ -12,7 +12,11 @@ export interface ProviderConnection {
   proxyUrl?: string;
   envProvider?: ProviderId;
 }
-export interface ModelBinding { connectionId: string; model: string }
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ModelReasoning =
+  | { kind: "effort"; level: ReasoningEffort }
+  | { kind: "budget"; tokens: number };
+export interface ModelBinding { connectionId: string; model: string; reasoning?: ModelReasoning }
 export type PublicConnection = Omit<ProviderConnection, "apiKey" | "proxyUrl"> & {
   hasKey: boolean; keySource: KeySource; keyPreview: string;
   hasProxy: boolean; proxyPreview: string;

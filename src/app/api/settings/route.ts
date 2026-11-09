@@ -2,6 +2,7 @@ import { getSettings, saveSettings, toPublicSettings } from "@/lib/server/settin
 import { PROVIDERS, type ProviderId, type ProviderConnection, type ModelBinding } from "@/lib/types";
 import { normalizeFishProxy } from "@/lib/server/fish";
 import { normalizeHttpProxy } from "@/lib/server/http-proxy";
+import { reasoningError } from "@/lib/model-reasoning";
 
 export const dynamic = "force-dynamic";
 
@@ -57,8 +58,14 @@ export async function PUT(req: Request) {
   }
   if (body.provider || body.providers) {
     const id = body.provider ?? s.provider;
-    if (body.provider || body.providers?.[id]?.chatModel !== undefined) s.models.chat = { connectionId: id, model: s.providers[id].chatModel };
-    if (body.provider || body.providers?.[id]?.analysisModel !== undefined) s.models.analysis = { connectionId: id, model: s.providers[id].analysisModel };
+    for (const purpose of ["chat", "analysis"] as const) {
+      const field = purpose === "chat" ? "chatModel" : "analysisModel";
+      if (!body.provider && body.providers?.[id]?.[field] === undefined) continue;
+      const model = s.providers[id][field];
+      const previous = s.models[purpose];
+      s.models[purpose] = { connectionId: id, model,
+        ...(previous.connectionId === id && previous.model === model && previous.reasoning ? { reasoning: previous.reasoning } : {}) };
+    }
   }
   if (body.connections !== undefined) {
     if (!Array.isArray(body.connections) || !body.connections.length || body.connections.length > 30) return Response.json({ error: "请保留 1 至 30 个连接。" }, { status: 400 });
@@ -92,8 +99,11 @@ export async function PUT(req: Request) {
   if (body.models !== undefined) s.models = body.models;
   for (const purpose of ["chat", "analysis"] as const) {
     const binding = s.models?.[purpose];
-    if (!binding || typeof binding.model !== "string" || !binding.model.trim() || !s.connections.some((c) => c.id === binding.connectionId)) return Response.json({ error: "讲解和分析模型必须绑定有效连接及模型名称。" }, { status: 400 });
+    const connection = s.connections.find((c) => c.id === binding?.connectionId);
+    if (!binding || typeof binding.model !== "string" || !binding.model.trim() || !connection) return Response.json({ error: "讲解和分析模型必须绑定有效连接及模型名称。" }, { status: 400 });
     binding.model = binding.model.trim().slice(0, 200);
+    const error = reasoningError(binding.reasoning, connection.protocol, binding.model);
+    if (error) return Response.json({ error: (purpose === "chat" ? "讲解" : "分析") + "模型：" + error }, { status: 400 });
   }
   if (body.fish) {
     if (proxyUrl !== undefined) s.fish.proxyUrl = proxyUrl;

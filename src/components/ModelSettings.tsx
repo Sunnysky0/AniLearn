@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { Loader2, Plus, PlugZap, Save, Trash2 } from "lucide-react";
 import { PROVIDERS, type PublicSettings, type PublicConnection, type ConnectionProtocol, type ModelBinding } from "@/lib/types";
+import { reasoningError } from "@/lib/model-reasoning";
+import ReasoningSettings from "./ReasoningSettings";
 
 const input = "w-full border border-neutral-300 bg-white px-3 py-2 text-sm";
 type EditConnection = PublicConnection & { apiKey: string | null; proxyUrl?: string | null };
@@ -16,9 +18,44 @@ export default function ModelSettings() {
       .then((s) => { setConnections(s.connections.map((c) => ({ ...c, apiKey: "" }))); setModels(s.models); })
       .catch((e) => setResult(String(e)));
   }, []);
-  const edit = (id: string, patch: Partial<EditConnection>) => setConnections((all) => all.map((c) => c.id === id ? { ...c, ...patch } : c));
+  const edit = (id: string, patch: Partial<EditConnection>) => {
+    setConnections((all) => all.map((c) => c.id === id ? { ...c, ...patch } : c));
+    if (patch.protocol && models) {
+      const next = { ...models };
+      let cleared = false;
+      for (const purpose of ["chat", "analysis"] as const) {
+        const binding = next[purpose];
+        if (binding.connectionId === id && binding.reasoning && reasoningError(binding.reasoning, patch.protocol, binding.model)) {
+          next[purpose] = { ...binding, reasoning: undefined };
+          cleared = true;
+        }
+      }
+      if (cleared) {
+        setModels(next);
+        setResult("接口类型已变更，不适用的推理设置已重置。");
+      }
+    }
+  };
+  const updateBinding = (purpose: "chat" | "analysis", patch: Partial<Pick<ModelBinding, "connectionId" | "model">>) => {
+    if (!models) return;
+    const binding = { ...models[purpose], ...patch };
+    const connection = connections.find((c) => c.id === binding.connectionId);
+    if (binding.reasoning && connection && reasoningError(binding.reasoning, connection.protocol, binding.model)) {
+      binding.reasoning = undefined;
+      setResult("模型已变更，不适用的推理设置已重置。");
+    }
+    setModels({ ...models, [purpose]: binding });
+  };
   async function save(purpose?: "chat" | "analysis") {
+    if (!models) return;
+    for (const kind of ["chat", "analysis"] as const) {
+      const binding = models[kind];
+      const protocol = connections.find((c) => c.id === binding.connectionId)?.protocol;
+      const error = protocol && reasoningError(binding.reasoning, protocol, binding.model);
+      if (error) { setResult((kind === "chat" ? "讲解" : "分析") + "模型：" + error); return; }
+    }
     setBusy(true); setResult("");
+    let persisted = false;
     try {
       const res = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ connections: connections.map((c) => ({ id: c.id, name: c.name, protocol: c.protocol, baseUrl: c.baseUrl,
@@ -26,13 +63,15 @@ export default function ModelSettings() {
           envProvider: c.envProvider, ...(c.apiKey === null || c.apiKey ? { apiKey: c.apiKey } : {}) })), models }) });
       const data = await res.json(); if (!res.ok) throw new Error(data.error);
       setConnections((data as PublicSettings).connections.map((c) => ({ ...c, apiKey: "" })));
+      setModels((data as PublicSettings).models);
+      persisted = true;
       setResult("模型设置已保存");
       if (purpose) {
         const test = await fetch("/api/settings/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purpose }) });
         const reply = await test.json(); if (!reply.ok) throw new Error(reply.error);
         setResult(`${purpose === "chat" ? "讲解" : "分析"}模型 ${reply.model}：${reply.reply}`);
       }
-    } catch (e) { setResult(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setResult((persisted ? "模型设置已保存，但测试失败：" : "") + (e instanceof Error ? e.message : String(e))); }
     finally { setBusy(false); }
   }
   return <section className="space-y-5 border-t-2 border-neutral-900 py-6">
@@ -57,13 +96,21 @@ export default function ModelSettings() {
         <button title="删除连接" aria-label={`删除 ${c.name}`} disabled={models?.chat.connectionId === c.id || models?.analysis.connectionId === c.id} className="p-2 disabled:opacity-30" onClick={() => setConnections((all) => all.filter((old) => old.id !== c.id))}><Trash2 className="h-4 w-4" /></button></div>
     </div>)}
     <h2 className="pt-2 font-bold">模型用途</h2>
-    {models && (["chat", "analysis"] as const).map((purpose) => <div key={purpose} className="grid items-end gap-3 sm:grid-cols-[1fr_1fr_auto]">
-      <label className="text-sm">{purpose === "chat" ? "讲解模型连接" : "分析模型连接"}<select aria-label={`${purpose}连接`} value={models[purpose].connectionId} className={`${input} mt-1`} onChange={(e) => setModels({ ...models, [purpose]: { ...models[purpose], connectionId: e.target.value } })}>
-        {connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-      </select></label>
-      <label className="text-sm">模型名称<input aria-label={`${purpose}模型名称`} value={models[purpose].model} className={`${input} mt-1`} onChange={(e) => setModels({ ...models, [purpose]: { ...models[purpose], model: e.target.value } })} /></label>
-      <button disabled={busy} className="flex items-center gap-2 border border-neutral-300 px-3 py-2 text-sm" onClick={() => void save(purpose)}><PlugZap className="h-4 w-4" />测试</button>
-    </div>)}
+    {models && (["chat", "analysis"] as const).map((purpose) => {
+      const binding = models[purpose];
+      const protocol = connections.find((c) => c.id === binding.connectionId)?.protocol ?? "openai-compatible";
+      return <div key={purpose} className="space-y-3 border-b border-neutral-200 pb-5">
+        <div className="grid items-end gap-3 sm:grid-cols-[1fr_1fr_auto]">
+          <label className="text-sm">{purpose === "chat" ? "讲解模型连接" : "分析模型连接"}<select aria-label={purpose + "连接"} value={binding.connectionId} className={input + " mt-1"} onChange={(e) => updateBinding(purpose, { connectionId: e.target.value })}>
+            {connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select></label>
+          <label className="text-sm">模型名称<input aria-label={purpose + "模型名称"} value={binding.model} className={input + " mt-1"} onChange={(e) => updateBinding(purpose, { model: e.target.value })} /></label>
+          <button disabled={busy} className="flex items-center gap-2 border border-neutral-300 px-3 py-2 text-sm" onClick={() => void save(purpose)}><PlugZap className="h-4 w-4" />测试</button>
+        </div>
+        <ReasoningSettings purpose={purpose} protocol={protocol} model={binding.model} value={binding.reasoning}
+          onChange={(reasoning) => setModels({ ...models, [purpose]: { ...binding, reasoning } })} />
+      </div>;
+    })}
     <div className="flex flex-wrap items-center gap-3"><button disabled={busy || !models} className="flex items-center gap-2 bg-neutral-900 px-4 py-2 text-sm text-white" onClick={() => void save()}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}保存模型设置</button>
       <p role="status" className="break-words text-sm">{result}</p></div>
   </section>;

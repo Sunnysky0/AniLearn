@@ -42,6 +42,8 @@ await sql('delete from app_settings');
 await sql('insert into app_settings (id, data) values (1,$1)', [{ provider: 'gemini', providers: { gemini: { apiKey: key, baseUrl: 'http://127.0.0.1:4107', chatModel: 'audit-language', analysisModel: 'audit-plan' } } }]);
 let settings = ok(await api('/api/settings'));
 assert.equal(settings.models.chat.connectionId, 'gemini');
+assert.equal(settings.models.chat.reasoning, undefined);
+assert.equal(settings.models.analysis.reasoning, undefined);
 assert.ok(!JSON.stringify(settings).includes(key));
 pass('legacy settings migrate to connections and preserve masked keys');
 const connections = [
@@ -59,6 +61,32 @@ assert.equal((await api('/api/settings', 'PUT', { connections: connections.filte
 for (const purpose of ['chat', 'analysis']) assert.equal(ok(await api('/api/settings/test', 'POST', { purpose })).model, models[purpose].model);
 assert.ok(!JSON.stringify(settings).includes(key));
 pass('independent purpose tests, multiple compatible connections and referenced deletion guard');
+const reasoningModels = {
+  chat: { connectionId: 'chat', model: 'audit-finish-full', reasoning: { kind: 'effort', level: 'high' } },
+  analysis: { connectionId: 'analysis', model: 'gemini-2.5-flash', reasoning: { kind: 'budget', tokens: 1024 } },
+};
+settings = ok(await api('/api/settings', 'PUT', { models: reasoningModels }));
+assert.deepEqual(settings.models, reasoningModels);
+assert.ok(settings.connections.find(c => c.id === 'chat').hasKey);
+assert.deepEqual(ok(await api('/api/settings')).models, reasoningModels);
+for (const invalid of [
+  { ...reasoningModels, chat: { ...reasoningModels.chat, reasoning: { kind: 'effort', level: 'invalid' } } },
+  { ...reasoningModels, chat: { ...reasoningModels.chat, reasoning: { kind: 'budget', tokens: 1024 } } },
+  { ...reasoningModels, analysis: { ...reasoningModels.analysis, model: 'gemini-2.5-pro', reasoning: { kind: 'budget', tokens: 0 } } },
+  { ...reasoningModels, analysis: { ...reasoningModels.analysis, model: 'gemini-2.5-flash-lite', reasoning: { kind: 'budget', tokens: 511 } } },
+]) {
+  assert.equal((await api('/api/settings', 'PUT', { models: invalid })).status, 400);
+  assert.deepEqual(ok(await api('/api/settings')).models, reasoningModels);
+}
+const beforeReasoning = (await (await fetch('http://127.0.0.1:4107/requests')).json()).length;
+for (const purpose of ['chat', 'analysis']) assert.equal(ok(await api('/api/settings/test', 'POST', { purpose })).model, reasoningModels[purpose].model);
+const reasoningRequests = (await (await fetch('http://127.0.0.1:4107/requests')).json()).slice(beforeReasoning);
+assert.ok(reasoningRequests.some(r => r.model === reasoningModels.chat.model && r.reasoning === 'high'));
+assert.ok(reasoningRequests.some(r => r.model === reasoningModels.analysis.model && r.reasoning?.thinkingBudget === 1024));
+settings = ok(await api('/api/settings', 'PUT', { models: { ...reasoningModels, chat: { ...reasoningModels.chat, reasoning: { kind: 'effort', level: 'medium' } } } }));
+assert.deepEqual(settings.models.analysis.reasoning, reasoningModels.analysis.reasoning);
+await configure();
+pass('reasoning settings round-trip, reject invalid input and reach both model tests');
 const tutor = ok(await api('/api/tutors')).find(t => t.name === '阿尔托莉雅');
 assert.ok(tutor); assert.equal(tutor.voiceId, '4aa42286f3844a29a243e2ebd29f815f'); assert.equal(tutor.subject, undefined);
 async function paper(pace = 'focused') {

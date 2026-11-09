@@ -177,6 +177,7 @@ export function getLLMConfig(s: SettingsData, purpose: "chat" | "analysis"): LLM
   return {
     provider: id, apiKey: key, baseUrl: connection.baseUrl.trim() || undefined, model,
     connectionId: connection.id, proxyUrl: connection.proxyUrl?.trim() || undefined,
+    reasoning: binding.reasoning,
   };
 }
 

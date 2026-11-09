@@ -90,13 +90,15 @@ async function init() {
       }
       const gemini = /^\/v1beta\/models\/.+:streamGenerateContent\?alt=sse$/.test(req.url);
       if (req.url !== '/v1/chat/completions' && !gemini) return json(res, { error: 'not found' }, 404);
+      const reasoning = gemini ? body.generationConfig?.thinkingConfig ?? null : body.reasoning_effort ?? null;
       if (gemini) body = {
         model: decodeURIComponent(req.url.match(/\/models\/(.+):stream/)[1]),
         max_tokens: body.generationConfig.maxOutputTokens,
         messages: [{ role: 'system', content: body.systemInstruction.parts.map(p => p.text).join('\n') },
           ...body.contents.map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.parts.map(p => p.text ? { type: 'text', text: p.text } : { type: 'image' }) }))],
       };
-      requests.push({ model: body.model, max_tokens: body.max_tokens ?? null, max_completion_tokens: body.max_completion_tokens ?? null, messages: body.messages?.map(m => ({ role: m.role, content: safeParts(m.content) })) });
+      requests.push({ model: body.model, max_tokens: body.max_tokens ?? null, max_completion_tokens: body.max_completion_tokens ?? null,
+        reasoning, messages: body.messages?.map(m => ({ role: m.role, content: safeParts(m.content) })) });
       const system = body.messages[0].content;
       const input = body.messages.at(-1).content;
       const inputText = typeof input === 'string' ? input : input.filter(p => p.type === 'text').map(p => p.text).join('\n');

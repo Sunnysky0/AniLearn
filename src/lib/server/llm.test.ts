@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ProxyAgent } from "undici";
-import { complete, LLMRequestError, streamChat } from "./llm";
+import { complete, LLMRequestError, streamChat, type LLMConfig } from "./llm";
 
 const encoder = new TextEncoder();
 const config = (provider: "openai" | "xai" | "anthropic" | "gemini", proxyUrl?: string) => ({
@@ -157,6 +157,88 @@ test("requests without a proxy continue to use direct fetch", async () => {
     };
     await complete(config("openai"), { system: "", messages: [] });
     assert.equal(dispatcher, undefined);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("provider requests send only the configured reasoning control", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    const cases: { cfg: LLMConfig; body: Record<string, unknown>; header?: string }[] = [
+      { cfg: { ...config("openai"), model: "gpt-5", reasoning: { kind: "effort", level: "high" } },
+        body: { reasoning_effort: "high", max_completion_tokens: 8192 } },
+      { cfg: { ...config("openai"), reasoning: { kind: "effort", level: "low" } }, body: { reasoning_effort: "low" } },
+      { cfg: { ...config("xai"), model: "grok-4.7", reasoning: { kind: "effort", level: "medium" } }, body: { reasoning_effort: "medium" } },
+      { cfg: { ...config("anthropic"), model: "claude-opus-5-5", reasoning: { kind: "effort", level: "max" } },
+        body: { output_config: { effort: "max" } }, header: "2026-10-21" },
+      { cfg: { ...config("gemini"), model: "gemini-3-pro-preview", reasoning: { kind: "effort", level: "low" } },
+        body: { generationConfig: { maxOutputTokens: 8192, thinkingConfig: { thinkingLevel: "low" } } } },
+      { cfg: { ...config("gemini"), model: "gemini-2.5-pro", reasoning: { kind: "budget", tokens: 2048 } },
+        body: { generationConfig: { maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 2048 } } } },
+    ];
+    for (const { cfg, body: expected, header } of cases) {
+      let body: Record<string, unknown> = {};
+      let headers: Record<string, string> = {};
+      globalThis.fetch = async (_url, init) => {
+        body = JSON.parse(String(init?.body));
+        headers = init?.headers as Record<string, string>;
+        return responseFor(cfg.provider);
+      };
+      assert.equal(await complete(cfg, { system: "system", messages: [{ role: "user", content: "question" }] }), "ok");
+      for (const [key, value] of Object.entries(expected)) assert.deepEqual(body[key], value, cfg.provider + " " + key);
+      if (header) assert.equal(headers["anthropic-version"], header);
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("legacy configurations omit reasoning fields for every provider", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    for (const provider of ["openai", "xai", "anthropic", "gemini"] as const) {
+      let body: Record<string, unknown> = {};
+      let headers: Record<string, string> = {};
+      globalThis.fetch = async (_url, init) => {
+        body = JSON.parse(String(init?.body));
+        headers = init?.headers as Record<string, string>;
+        return responseFor(provider);
+      };
+      await complete(config(provider), { system: "", messages: [] });
+      assert.equal(body.reasoning_effort, undefined);
+      assert.equal(body.output_config, undefined);
+      assert.equal((body.generationConfig as Record<string, unknown> | undefined)?.thinkingConfig, undefined);
+      if (provider === "anthropic") assert.equal(headers["anthropic-version"], "2023-06-01");
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("unsupported reasoning and short output budgets fail without discarding the setting", async () => {
+  const previousFetch = globalThis.fetch;
+  let calls = 0;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      calls++;
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.reasoning_effort, "high");
+      assert.equal(body.max_completion_tokens, 512);
+      return new Response(JSON.stringify({ error: { message: "Unsupported value: reasoning_effort high for this model" } }), { status: 400 });
+    };
+    const cfg: LLMConfig = { ...config("openai"), model: "gpt-5", reasoning: { kind: "effort", level: "high" } };
+    await assert.rejects(complete(cfg, { system: "", messages: [], maxTokens: 512 }),
+      (error: unknown) => error instanceof LLMRequestError && error.upstreamStatus === 400 && /reasoning_effort/.test(error.message));
+    assert.equal(calls, 1);
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.max_completion_tokens, 512);
+      assert.equal(body.reasoning_effort, "high");
+      return new Response('data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n');
+    };
+    await assert.rejects(complete(cfg, { system: "", messages: [], maxTokens: 512 }),
+      (error: unknown) => error instanceof LLMRequestError && error.code === "LLM_OUTPUT_TRUNCATED");
   } finally {
     globalThis.fetch = previousFetch;
   }

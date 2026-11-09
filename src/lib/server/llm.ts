@@ -1,6 +1,6 @@
 // Unified streaming client for OpenAI / Anthropic / Grok (xAI) / Gemini.
 // Uses raw fetch + SSE parsing so no vendor SDKs are required.
-import type { ProviderId } from "@/lib/types";
+import type { ModelReasoning, ProviderId } from "@/lib/types";
 import { createProxyAgent } from "./http-proxy";
 
 export type LLMPart =
@@ -19,6 +19,7 @@ export interface LLMConfig {
   baseUrl?: string;
   connectionId?: string;
   proxyUrl?: string;
+  reasoning?: ModelReasoning;
 }
 
 export interface ChatOptions {
@@ -312,6 +313,7 @@ async function* streamOpenAICompat(cfg: LLMConfig, opts: InternalChatOptions): A
       model: cfg.model,
       messages: [{ role: "system", content: opts.system }, ...msgs],
       stream: true,
+      ...(cfg.reasoning?.kind === "effort" ? { reasoning_effort: cfg.reasoning.level } : {}),
       ...(cfg.provider === "openai" && /^(?:gpt-5|o\d)/.test(cfg.model)
         ? { max_completion_tokens: opts.maxTokens ?? 8192 }
         : { max_tokens: opts.maxTokens ?? 8192 }),
@@ -359,7 +361,7 @@ async function* streamAnthropic(cfg: LLMConfig, opts: InternalChatOptions): Asyn
       headers: {
         "content-type": "application/json",
         "x-api-key": cfg.apiKey,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": cfg.reasoning?.kind === "effort" ? "2026-10-21" : "2023-06-01",
       },
       body: JSON.stringify({
         model: cfg.model,
@@ -367,6 +369,7 @@ async function* streamAnthropic(cfg: LLMConfig, opts: InternalChatOptions): Asyn
         system: opts.system,
         messages,
         stream: true,
+        ...(cfg.reasoning?.kind === "effort" ? { output_config: { effort: cfg.reasoning.level } } : {}),
       }),
       signal: opts.signal,
     }, opts));
@@ -420,7 +423,11 @@ async function* streamGemini(cfg: LLMConfig, opts: InternalChatOptions): AsyncGe
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: opts.system }] },
       contents,
-      generationConfig: { maxOutputTokens: opts.maxTokens ?? 8192 },
+      generationConfig: {
+        maxOutputTokens: opts.maxTokens ?? 8192,
+        ...(cfg.reasoning?.kind === "effort" ? { thinkingConfig: { thinkingLevel: cfg.reasoning.level } } :
+          cfg.reasoning?.kind === "budget" ? { thinkingConfig: { thinkingBudget: cfg.reasoning.tokens } } : {}),
+      },
     }),
     signal: opts.signal,
   }, opts));

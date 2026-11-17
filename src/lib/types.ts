@@ -46,6 +46,7 @@ export interface TurnRequest {
   intent?: TurnIntent;
   problemIdx?: number;
   planVersion?: number;
+  checkCompletion?: boolean;
 }
 export const COMPLETE_PROBLEM_TEXT = "我懂了，下一题";
 export const GOODBYE_TEXT = "就到这里吧，再见";
@@ -63,6 +64,17 @@ export const CORE_COVERAGE_TOPICS = ["solution", "knowledge", "skills", "pitfall
 export const COVERAGE_TOPICS = [...CORE_COVERAGE_TOPICS, "extension", "practice"] as const;
 export type CoverageTopic = (typeof COVERAGE_TOPICS)[number];
 export type TeachingCoverage = Record<string, string>;
+export interface CompletionConfirmation {
+  confirmedAt: string;
+  planVersion: number;
+  goalIds: string[];
+}
+export type CompletionConfirmations = Record<string, CompletionConfirmation>;
+export interface CompletionCheck {
+  status: "covered" | "missing" | "check_failed";
+  missingGoals: LearningGoal[];
+  code?: string;
+}
 
 export interface KnowledgePoint {
   name: string;
@@ -299,6 +311,7 @@ export interface SessionDTO {
   updatedAt: string;
   plan?: LearningPlan | null;
   pendingPlan?: LearningPlan | null;
+  completionConfirmations?: CompletionConfirmations;
 }
 
 export interface MessageDTO {
@@ -324,7 +337,7 @@ export type TurnEvent =
   | { type: "message"; message: MessageDTO }
   | { type: "board"; board: BoardDTO; blockId: string; message: MessageDTO }
   | { type: "problem"; message: MessageDTO; session: SessionDTO }
-  | { type: "done"; action: TurnAction; session: SessionDTO; intent?: TurnIntent }
+  | { type: "done"; action: TurnAction; session: SessionDTO; intent?: TurnIntent; completionCheck?: CompletionCheck }
   | { type: "error"; error: string };
 
 export type AnalysisEvent =

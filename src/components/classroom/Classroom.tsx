@@ -27,6 +27,7 @@ import { useSpeechAudioController } from "@/lib/client/speech-audio";
 import { difficultyStars, formatTime, strategyLabel, tokenizeForReveal } from "@/lib/text";
 import type {
   BoardDTO,
+  CompletionCheck,
   MessageDTO,
   PaperDTO,
   ProblemDTO,
@@ -36,7 +37,7 @@ import type {
   TurnRequest,
   TutorDTO,
 } from "@/lib/types";
-import { GOODBYE_TEXT, turnIntentForText } from "@/lib/types";
+import { COMPLETE_PROBLEM_TEXT, GOODBYE_TEXT, turnIntentForText } from "@/lib/types";
 import { DEFAULT_PACE, type TeachingPace } from "@/lib/types";
 import PacePicker from "@/components/PacePicker";
 
@@ -182,6 +183,10 @@ export default function Classroom(props: Props) {
     return o;
   });
   const [session, setSession] = useState<SessionDTO>(props.session);
+  function personallyConfirmed(idx: number) {
+    const confirmation = session.completionConfirmations?.[String(idx)];
+    return !!confirmation && (session.plan?.units.find((unit) => unit.idx === idx)?.goals.every((goal) => confirmation.goalIds.includes(goal.id)) ?? true);
+  }
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState("");
   async function updatePace(pace: TeachingPace, request = "") {
@@ -230,6 +235,7 @@ export default function Classroom(props: Props) {
     clearError: clearAttachmentError,
   } = useChatAttachments();
   const [error, setError] = useState<string | null>(null);
+  const [completionCheck, setCompletionCheck] = useState<CompletionCheck | null>(null);
   const [ttsError, setTtsError] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const [autoContinue, setAutoContinue] = useState(props.autoContinueDefault);
@@ -443,6 +449,7 @@ export default function Classroom(props: Props) {
             setOverlay("none");
           } else if (item.type === "done") {
             setSession(item.session);
+            setCompletionCheck(item.completionCheck ?? null);
             item.turn.done = item;
             if (!flushRef.current && !item.turn.cancelled) {
               lastActionRef.current = item.intent === "goodbye" ? "wait" : item.action;
@@ -494,7 +501,7 @@ export default function Classroom(props: Props) {
     }
     const act = lastActionRef.current;
     lastActionRef.current = null;
-    if ((act === "continue" || act === "next") && prefs.current.autoContinue && autoCountRef.current < 6) {
+    if ((act === "continue" || act === "next") && props.llmReady && prefs.current.autoContinue && autoCountRef.current < 6) {
       autoCountRef.current += 1;
       void startTurn({});
     }
@@ -506,10 +513,11 @@ export default function Classroom(props: Props) {
     const text = payload.text ?? "";
     const images = payload.images ?? [];
     payload = { ...payload, intent: payload.intent ?? turnIntentForText(text) };
+    if (payload.intent === "complete_problem" || payload.checkCompletion) payload.problemIdx ??= session.currentIdx;
     const turn: ClientTurn = { streamEnded: false, failed: false, cancelled: false };
     currentTurnRef.current = turn;
     payload.planVersion ??= session.plan?.version ?? 1;
-    retryRef.current = { intent: payload.intent, problemIdx: payload.problemIdx, planVersion: payload.planVersion };
+    retryRef.current = { intent: payload.intent, problemIdx: payload.problemIdx, planVersion: payload.planVersion, checkCompletion: payload.checkCompletion };
     setReturnState(payload.intent === "goodbye" ? "waiting" : "hidden");
     if (text || images.length) {
       appendMessage({
@@ -528,13 +536,14 @@ export default function Classroom(props: Props) {
     abortRef.current = ac;
     streamingRef.current = true;
     setError(null);
+    setCompletionCheck(null);
     if (!pumpingRef.current) setBusy("thinking");
     try {
       const request = () =>
         fetch(`/api/sessions/${props.session.id}/turn`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, images, intent: payload.intent, problemIdx: payload.problemIdx, planVersion: payload.planVersion ?? session.plan?.version ?? 1 }),
+          body: JSON.stringify({ text, images, intent: payload.intent, problemIdx: payload.problemIdx, planVersion: payload.planVersion ?? session.plan?.version ?? 1, checkCompletion: payload.checkCompletion }),
           signal: ac.signal,
         });
       let res = await request();
@@ -609,7 +618,8 @@ export default function Classroom(props: Props) {
   function send(raw: string, images: string[] = [], clearDraft = true): boolean {
     const text = raw.trim();
     if (!text && !images.length) return false;
-    if (!props.llmReady) {
+    const intent = turnIntentForText(text);
+    if (!props.llmReady && intent !== "complete_problem") {
       setError("尚未配置 AI 模型 API Key，请先前往「设置」页面配置。");
       return false;
     }
@@ -621,7 +631,6 @@ export default function Classroom(props: Props) {
     autoCountRef.current = 0;
     lastActionRef.current = null;
     setReturnState("hidden");
-    const intent = turnIntentForText(text);
     if (streamingRef.current || pumpingRef.current) {
       // Interrupt: flush what the tutor already said, stop generation, then ask.
       pendingRef.current.push({ text, images, intent, problemIdx: intent === "complete_problem" ? session.currentIdx : undefined });
@@ -655,6 +664,7 @@ export default function Classroom(props: Props) {
   }
 
   async function gotoProblem(i: number) {
+    setCompletionCheck(null);
     setReturnState("hidden");
     setShowOutline(false);
     if (i === session.currentIdx) {
@@ -987,6 +997,18 @@ export default function Classroom(props: Props) {
               );
             })}
 
+            {personallyConfirmed(session.currentIdx) && session.progress[String(session.currentIdx)] === "done" && (
+              <div role="status" className="mt-4 border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">本题已由你本人确认完成。</div>
+            )}
+
+            {completionCheck && completionCheck.status !== "covered" && (
+              <div role="status" className="mt-4 border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
+                <p>{completionCheck.status === "check_failed" ? "完成检查暂时失败，已讲内容已保存。你可以重试；如果已经理解，也可以点击“我懂了，下一题”直接确认完成。" : "以下目标尚未确认完成。可以继续讨论；如果已经理解，也可以点击“我懂了，下一题”直接确认完成。"}</p>
+                {completionCheck.missingGoals.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-4">{completionCheck.missingGoals.map((goal) => <li key={goal.id}>{goal.description}</li>)}</ul>}
+                {completionCheck.status === "check_failed" && <button type="button" onClick={() => void startTurn({ checkCompletion: true, problemIdx: session.currentIdx })} disabled={busy !== "idle" || !props.llmReady} className="mt-2 underline underline-offset-2 disabled:opacity-40">重试完成检查</button>}
+              </div>
+            )}
+
             {session.status === "completed" && busy === "idle" && (
               <div className="fade-up mt-5 border-y-2 border-neutral-900 py-5 text-center">
                 <Check className="mx-auto h-7 w-7 text-neutral-900" />
@@ -1072,7 +1094,7 @@ export default function Classroom(props: Props) {
             onClearAttachmentError={clearAttachmentError}
             canSend={props.llmReady}
             busy={busy !== "idle"}
-            quickActions={QUICK.map((q) => ({ label: q, onSelect: () => send(q, [], false) }))}
+            quickActions={QUICK.map((q) => ({ label: q, onSelect: () => send(q, [], false), enabled: q === COMPLETE_PROBLEM_TEXT ? !planning && session.progress[String(session.currentIdx)] !== "done" : undefined }))}
             onHint={() => send("给我一点提示", [], false)}
             onSend={(text, images) => send(text, images, true)}
             onStop={stop}
@@ -1175,6 +1197,7 @@ export default function Classroom(props: Props) {
                       </div>
                       <div className="line-clamp-1 text-xs text-neutral-500">{p.title}</div>
                       {!selected.has(i) && <div className="text-xs text-neutral-500">未纳入本课</div>}
+                      {st === "done" && personallyConfirmed(i) && <div className="text-xs text-neutral-500">本人确认完成</div>}
                       {session.plan?.units.find((u) => u.idx === i) && <div className="mt-2 text-xs leading-5 text-neutral-600"><p>{session.plan.units.find((u) => u.idx === i)?.reason}</p>{session.plan.units.find((u) => u.idx === i)?.goals.map((goal) => <p key={goal.id}>{goal.description}</p>)}</div>}
                       <div className="mt-1 flex items-center gap-2 text-[11px]">
                         <span className="text-neutral-800">{difficultyStars(p.difficulty)}</span>

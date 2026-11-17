@@ -84,6 +84,7 @@ export const toProblemDTO = (r: ProblemRow | ProblemDTO): ProblemDTO => ({
 });
 
 export const toSessionDTO = (r: SessionRow): SessionDTO => ({
+  completionConfirmations: r.completionConfirmations ?? {},
   plan: r.plan,
   pendingPlan: r.pendingPlan,
   id: r.id,

@@ -8,6 +8,7 @@ import { MAX_CHAT_IMAGES, MAX_CHAT_TEXT_CHARS } from "@/lib/types";
 export interface ComposerAction {
   label: string;
   onSelect: () => void;
+  enabled?: boolean;
 }
 
 export function ClassroomComposer(props: {
@@ -57,7 +58,7 @@ export function ClassroomComposer(props: {
       <div className="thin-scroll mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
         {props.quickActions.map((action) => (
           <button key={action.label} type="button" onClick={action.onSelect}
-            disabled={!props.canSend || props.imageProcessing}
+            disabled={!(action.enabled ?? props.canSend) || props.imageProcessing}
             className="shrink-0 border border-neutral-200 bg-white px-3 py-1 text-xs text-neutral-600 transition hover:border-neutral-300 hover:bg-neutral-100 hover:text-neutral-800 disabled:cursor-not-allowed disabled:opacity-40">
             {action.label}
           </button>

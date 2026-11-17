@@ -1,4 +1,4 @@
-import { CORE_COVERAGE_TOPICS, COVERAGE_TOPICS, PACES, type LearningPlan, type LearningGoal, type PaperInventory, type TeachingPace, type TeachingCoverage, type ProblemDTO, type DirectoryProblemDTO } from "@/lib/types";
+import { CORE_COVERAGE_TOPICS, COVERAGE_TOPICS, PACES, type LearningPlan, type LearningGoal, type PaperInventory, type TeachingPace, type TeachingCoverage, type ProblemDTO, type DirectoryProblemDTO, type CompletionConfirmation } from "@/lib/types";
 import { complete, type LLMConfig } from "./llm";
 import { createTagParser } from "./protocol";
 
@@ -8,7 +8,8 @@ export function fullPlan(items: { idx: number }[], version = 1): LearningPlan {
 }
 export function goalsFor(plan: LearningPlan, idx: number): LearningGoal[] { return plan.units.find((unit) => unit.idx === idx)?.goals ?? []; }
 export function goalCovered(goal: LearningGoal, idx: number, saved: TeachingCoverage) { return !!saved[goal.id] || goal.description === descriptions[goal.topic] && !!(saved[`${idx}:${goal.topic}`] || saved[goal.topic]); }
-export function missingGoals(plan: LearningPlan, idx: number, saved: TeachingCoverage) { return goalsFor(plan, idx).filter((goal) => !goalCovered(goal, idx, saved)); }
+export function goalConfirmed(goal: LearningGoal, confirmation?: CompletionConfirmation) { return confirmation?.goalIds.includes(goal.id) ?? false; }
+export function missingGoals(plan: LearningPlan, idx: number, saved: TeachingCoverage, confirmation?: CompletionConfirmation) { return goalsFor(plan, idx).filter((goal) => !goalCovered(goal, idx, saved) && !goalConfirmed(goal, confirmation)); }
 export function directoryProblems(inventory: PaperInventory | null | undefined, analyzed: ProblemDTO[]): ProblemDTO[] {
   if (!inventory) return analyzed;
   const byIdx = new Map(analyzed.map((p) => [p.idx, p]));

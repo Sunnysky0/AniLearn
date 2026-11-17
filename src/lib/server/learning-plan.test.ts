@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fullPlan, goalCovered, parseLearningPlan, directoryDTO } from "./learning-plan";
+import { fullPlan, goalCovered, missingGoals, parseLearningPlan, directoryDTO } from "./learning-plan";
 import { parseInventory } from "./analysis";
 import type { PaperInventory } from "@/lib/types";
 
@@ -25,4 +25,14 @@ test("directory exposes nullable analysis without invented answers", () => {
   assert.equal(directory.length, 3);
   assert.ok(directory.every((item) => item.analysis === null));
   assert.deepEqual(parseInventory('<inventory pages="1" count="1"><overview>分类</overview><item number="1" page="1" endpage="1" topics="等式性质" difficulty="2">题目</item></inventory>', 1).items[0].idx, 0);
+});
+
+test("learner confirmation follows stable goal IDs across plan versions without creating evidence", () => {
+  const plan = parseLearningPlan('<plan><unit idx="0"><goal topic="knowledge">等式性质</goal><goal topic="skills">等价变形</goal></unit></plan>', inventory, "focused", 1, "");
+  const confirmed = { confirmedAt: "2026-11-17T00:00:00.000Z", planVersion: 1, goalIds: plan.units[0].goals.map((goal) => goal.id) };
+  assert.deepEqual(missingGoals({ ...plan, version: 2 }, 0, {}, confirmed), []);
+  const expanded = parseLearningPlan('<plan><unit idx="0"><goal topic="knowledge">等式性质</goal><goal topic="skills">等价变形与函数迁移</goal></unit></plan>', inventory, "focused", 2, "");
+  assert.deepEqual(missingGoals(expanded, 0, {}, confirmed).map((goal) => goal.topic), ["skills"]);
+  assert.deepEqual(missingGoals(plan, 0, {}, confirmed), []);
+  assert.equal(goalCovered(plan.units[0].goals[0], 0, {}), false);
 });

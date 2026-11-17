@@ -131,8 +131,8 @@ async function init() {
       } else if (system.includes('[COVERAGE_REPAIR]')) {
         if (body.model === 'audit-coverage-error') return json(res, { error: { message: 'Simulated coverage failure' } }, 503);
         output = ['audit-forged', 'audit-coverage-forged'].includes(body.model) ? coverage :
-          [...coverage.matchAll(/<covered topic="([^"]+)">([^<]+)<\/covered>/g)]
-            .filter(match => inputText.includes(match[2])).map(match => match[0]).join('');
+            [...coverage.matchAll(/<covered topic="([^"]+)">([^<]+)<\/covered>/g)]
+              .filter(match => system.includes(`${match[1]}=`) && inputText.includes(match[2])).map(match => match[0]).join('');
         for (const quote of ['核心知识点与方法总结', '这一题已经完整讲解。']) {
           if (inputText.includes(quote)) output = ['solution', 'knowledge', 'skills', 'pitfalls'].map(topic => `<covered topic="${topic}">${quote}</covered>`).join('');
         }

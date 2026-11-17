@@ -1,6 +1,6 @@
 import { hasJapaneseText, isJapaneseSpeech, splitShortMessages, withSpeechStyle } from "@/lib/text";
 import { COVERAGE_TOPICS, type CoverageTopic, type TeachingCoverage, type LearningGoal } from "@/lib/types";
-import { complete, type LLMConfig } from "./llm";
+import { complete, LLMRequestError, type LLMConfig } from "./llm";
 import { createTagParser, innerTag } from "./protocol";
 import { tutorSpeechRules } from "./prompts";
 
@@ -56,8 +56,10 @@ export function acceptCoverage(coverage: TeachingCoverage, topic: string, quote:
   if (!COVERAGE_TOPICS.includes(topic as CoverageTopic) || evidence.length < 6 ||
     !meaningful || declaration.test(meaningful) ||
     /^(?:完整解法|核心知识点|教材知识点|方法技巧|方法与技巧|易错陷阱|总结|复盘)+$/.test(meaningful) ||
-    !taught.some((s) => compact(s).includes(evidence) && compact(substantive(s)).includes(evidence))) return;
-  coverage[topic as CoverageTopic] = quote;
+    !taught.some((s) => compact(s).includes(evidence) && compact(substantive(s)).includes(evidence))) return false;
+  const previous = coverage[topic];
+  if (!previous || !compact(previous).includes(evidence)) coverage[topic] = previous ? `${previous}\n\n${quote}` : quote;
+  return true;
 }
 
 export const COVERAGE_LABELS: Record<CoverageTopic, string> = {
@@ -65,9 +67,17 @@ export const COVERAGE_LABELS: Record<CoverageTopic, string> = {
   extension: "拓展与迁移", practice: "变式练习与反馈",
 };
 
-export async function recoverCoverage(cfg: LLMConfig, coverage: TeachingCoverage, taught: string[], signal: AbortSignal, topics: CoverageTopic[] = ["solution", "knowledge", "skills", "pitfalls"], goals: LearningGoal[] = []) {
+export interface CoverageRecoveryResult {
+  status: "covered" | "missing" | "check_failed";
+  coverage: TeachingCoverage;
+  code?: string;
+}
+
+export async function recoverCoverage(cfg: LLMConfig, coverage: TeachingCoverage, taught: string[], signal: AbortSignal, topics: CoverageTopic[] = ["solution", "knowledge", "skills", "pitfalls"], goals: LearningGoal[] = []): Promise<CoverageRecoveryResult> {
+  signal.throwIfAborted();
   const missing = topics.filter((topic) => !coverage[topic]);
-  if (!missing.length || !taught.length) return coverage;
+  if (!missing.length) return { status: "covered", coverage };
+  if (!taught.some((text) => text.trim())) return { status: "missing", coverage };
   // Bound the repair context; prioritize recent teaching and never supply reference solutions.
   const sources: string[] = [];
   let remaining = 60_000;
@@ -84,24 +94,26 @@ export async function recoverCoverage(cfg: LLMConfig, coverage: TeachingCoverage
 缺失项及具体目标：${missing.map((topic) => `${topic}=${goals.find((g) => g.topic === topic)?.description ?? COVERAGE_LABELS[topic]}`).join("；")}。必须满足对应的具体目标，其他同类别内容不能代替。
 solution 须有求解步骤及答案；knowledge 须有具体知识及依据；skills 须有具体方法及应用；pitfalls 须有具体错误及注意事项。
 extension 须有实际推广与适用边界；practice 须有学生作答后的具体反馈，只有出题或参考答案不能作为练习反馈证据。
-每项仅在有实质讲解时输出 <covered topic="对应项">材料中的连续原文引文</covered>，引文至少六个非空白字符。
+每项仅在整个具体目标已有实质讲解时输出证据。讲解分散在多条消息或板书时，为同一 topic 重复输出多个 <covered topic="对应项">材料中的连续原文引文</covered>，共同证明整个目标。每段至少六个非空白字符，分别逐字引用一个来源；不要跨来源拼成一段，不要包含 Markdown 标题。只讲了目标的一部分时不输出该项。
 禁止使用标题、问候、已经讲完的宣告或引用学生内容作为证据。没有证据的项不输出；禁止编造、改写、补讲或输出 action、msg、board。`,
       messages: [{ role: "user", content: sources.map((source, i) => `【已讲内容 ${i + 1}】\n${source}`).join("\n\n") }],
-      maxTokens: 2048, signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]), stage: "coverage_repair",
+      maxTokens: 8192, signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]), stage: "coverage_repair",
     });
     signal.throwIfAborted();
     const parser = createTagParser(["covered"]);
     const blocks = [...parser.push(raw), ...parser.end()];
-    if (parser.stray().trim() || blocks.some((block) => !block.closed || !missing.includes(block.attrs.topic as CoverageTopic))) return coverage;
+    if (parser.stray().trim() || blocks.some((block) => !block.closed || !missing.includes(block.attrs.topic as CoverageTopic))) {
+      return { status: "check_failed", coverage, code: "COVERAGE_FORMAT_INVALID" };
+    }
     const repaired = { ...coverage };
     for (const block of blocks) {
-      if (missing.includes(block.attrs.topic as CoverageTopic)) {
-        acceptCoverage(repaired, block.attrs.topic, block.body.trim(), sources);
+      if (!acceptCoverage(repaired, block.attrs.topic, block.body.trim(), sources)) {
+        return { status: "check_failed", coverage, code: "COVERAGE_EVIDENCE_INVALID" };
       }
     }
-    return repaired;
-  } catch {
+    return { status: missing.every((topic) => repaired[topic]) ? "covered" : "missing", coverage: repaired };
+  } catch (error) {
     signal.throwIfAborted();
-    return coverage;
+    return { status: "check_failed", coverage, code: error instanceof LLMRequestError ? error.code : "COVERAGE_CHECK_FAILED" };
   }
 }

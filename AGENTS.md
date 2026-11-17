@@ -40,6 +40,7 @@ Built as a Next.js App Router app (React 19, Tailwind 4, Drizzle + PostgreSQL). 
 | Reading focus | An ordered article-analysis angle: `structure`, `writing`, `theme`, and for literary work `emotion` and `technique`. A student explicitly confirms each completed angle. |
 | Reading selection | A validated, stable-ID text anchor in the immutable reading-session snapshot. It supplies context for questions and private annotations. |
 | Coverage | Per-session, per-problem evidence for `solution`, `knowledge`, `skills`, and `pitfalls`, stored in `sessions.coverage`. |
+| Completion confirmation | Student-owned confirmation of the current plan's goal IDs, stored separately in `sessions.completion_confirmations`; it is not teaching evidence. |
 | Turn | One main tutor LLM call, with optional message/board repair calls. Streams NDJSON `TurnEvent`s. Ends with `wait` \| `continue` \| `next` \| `finish` on success. |
 | Board | Per-problem chalkboard page. Blocks of Markdown/LaTeX the student can treat as notes. |
 | Speech | Japanese TTS script stored on tutor text messages (`messages.speech`). |
@@ -105,7 +106,7 @@ API (all `force-dynamic`):
 | `PATCH/DELETE /api/papers/:id` | Edit/delete under the paper lock. Subject cannot change after publication or while a draft exists. |
 | `POST /api/sessions` | Start classroom (`paperId` + `tutorId`). Requires complete, error-free `ready` paper; saves snapshot in a transaction. |
 | `PATCH/DELETE /api/sessions/:id` | Jump/delete under the session lock; active generation returns `409`. |
-| `POST /api/sessions/:id/turn` | Tutor turn. Body `{ text?, images?, intent?: "complete_problem" \| "goodbye", problemIdx? }`. Streams `TurnEvent` NDJSON; successful `done` echoes the optional intent. Exact shortcut text also resolves the intent. `problemIdx` binds completion and retries to the intended problem; already-done targets only synchronize progress. |
+| `POST /api/sessions/:id/turn` | Tutor turn. Body `{ text?, images?, intent?: "complete_problem" \| "goodbye", problemIdx?, planVersion?, checkCompletion? }`. `complete_problem` (including exact shortcut text) atomically saves student confirmation and advances without LLM/TTS or coverage repair. `checkCompletion: true` retries only the evidence check and excludes text, images and intent. `problemIdx` binds confirmation/check retries; already-done confirmation targets only synchronize progress. `done` echoes intent and may include `completionCheck`. |
 | `POST /api/tts` | Fish Audio mp3. Body `{ text, voiceId }`. In-memory cache by model+voice+text. |
 | `GET /api/voices` | Fish Audio voice search (default `lang=ja`). |
 | `GET/PUT /api/settings` | Provider keys, models, Fish key, `autoContinue`. Keys never returned in full. |
@@ -124,6 +125,8 @@ Book turn context is limited to current-question text, the current chapter's ope
 
 Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullable for legacy sessions), and `sessions.coverage` (default `{}`). Sync schema before running this version in another environment. Do not remove these fields or use a destructive schema reset to resolve migration issues.
 
+Student confirmation adds `sessions.completion_confirmations` (default `{}`); review `docs/migrations/20261117-classroom-completion-confirmations.sql` before upgrading. Confirmations record time, plan version and exact goal IDs independently of coverage. Preserve matching goal confirmations through plan changes; expanded/new goals reopen learning. Never manufacture coverage quotes from a confirmation.
+
 ## Analysis and classroom integrity
 
 - Publish only after the complete inventory and every plan-selected detailed problem pass validation. Inventory and nullable details remain distinct; a partial required set must never emit `done` or become `ready`. Drafts are keyed by stable index, including non-contiguous selections.
@@ -137,8 +140,8 @@ Recovery fields: `papers.analysis_draft` (nullable), `sessions.snapshot` (nullab
 - Reading selection shortcuts bind exact selected text separately from supporting context and carry the current focus in both phases. Buffer shortcut output; require ordered exact visible-text quotes, Chinese explanation and a terminal `wait`. Retry only a target/shape validation failure once, within the original deadline. Prepare speech, atomically save all accepted tutor messages and turn success, then emit events. Never retry cancellation, transport, speech-repair or database errors as a selection failure. This guard checks targets and shape, not semantic correctness. Omitted `selectionTask` preserves legacy request hashes and successful replay.
 - `tryOperationLock` must reserve a connection from the separate lock pool, never the database work pool. Release on success, failure, cancellation, and pre-stream errors. Keep paper/session lock namespaces consistent across app processes.
 - Serialize session generation, jumps, and deletion. A `409` means another operation owns the lock. Client retries must be bounded; do not remove server locks to make an interrupted request succeed.
-- Only accept coverage quotes of at least six non-whitespace characters that appear in actual tutor Chinese messages or board content. Normal tags reference the current turn; completion may make one bounded repair call using saved teaching from this session and problem, never student input, other problems, or reference solutions. Reject headings and completion declarations as evidence. Persist coverage by problem index.
-- When plan-goal coverage is incomplete, convert `next`/`finish` to `wait`. Visit unfinished selected units before completing the session. Preserve effective evidence when goals match, require new evidence for expanded goals, and reject retries with obsolete plan versions. Supplementary analysis must match the snapshot material revision and atomically apply its plan only after success.
+- Only accept coverage quotes of at least six non-whitespace characters that appear in actual tutor Chinese messages or board content. Multiple independently validated quotes may prove one goal. Normal tags reference the current turn; completion may make one bounded repair call (8192 tokens, 30 seconds) using saved teaching from this session and problem, never student input, other problems, or reference solutions. Reject headings and completion declarations as evidence. Persist coverage by problem index.
+- Automatic `next`/`finish` requires the current goals' teaching evidence or prior student confirmation. Incomplete checks return `wait`; technical check failures return a distinct `completionCheck` status and never a false missing-teaching tutor bubble. Explicit `complete_problem` directly saves student confirmation. Visit unfinished selected units before finishing. Preserve matching evidence/confirmations, reopen expanded goals and reject obsolete plan versions. Supplementary analysis must match the snapshot material revision and atomically apply its plan only after success.
 - OpenAI/xAI requests must send the requested output budget (`max_completion_tokens` for OpenAI gpt-5/o-series, otherwise `max_tokens`). All adapters must reject truncation, safety stops, and premature stream termination.
 
 ## Streaming protocol
@@ -163,7 +166,7 @@ Do not switch analysis/tutor output to JSON. Tags survive raw LaTeX and parse wh
 
 - `<msg>` and `<board>` may interleave. Exactly one `<action>` at the end.
 - `wait` = wait for the student. `continue` = client auto-fires another turn (cap 6). `next` / `finish` update session progress.
-- `next` / `finish` and explicit `complete_problem` require the current plan's goals, backed by actual emitted or saved tutor content. Complete pace and legacy plans require all four core topics. Complete coverage alone does not finish a problem. Finish cannot skip unfinished selected units. Excluded items are not marked mastered. Coverage is a progress guard, not independent semantic verification.
+- Automatic `next` / `finish` requires the current plan's goals, backed by actual emitted/saved tutor content or prior student confirmation. Explicit `complete_problem` bypasses model checks and confirms the current goals without changing coverage. Complete pace and legacy plans have all four core goals. Coverage alone does not finish a problem. Finish cannot skip unfinished selected units. Excluded items are not marked mastered. Coverage is a progress guard, not independent semantic verification.
 - `goodbye` preserves progress and suppresses board work, completion and automatic continuation. The return-home control unlocks only after a successful done, normal stream EOF, and the entire playback/reveal queue is idle; cancellation or failure must not unlock it. Goodbye state is page-local; retry retains intent.
 - Sessions keep a paper/problem snapshot. Paper and session mutations use separate PostgreSQL advisory-lock connections, including across app processes.
 - Exam paper PDF, upload UI and server share `MAX_PAPER_PAGES = 12`; oversized paper PDFs are rejected explicitly. Reading sources have no page-count cap and are rendered and uploaded one page at a time.

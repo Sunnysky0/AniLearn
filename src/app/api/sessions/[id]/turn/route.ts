@@ -14,12 +14,13 @@ import { buildTutorMessages, buildTutorSystem, normalizeAction } from "@/lib/ser
 import { createTagParser, innerTag, stripTags, type TagBlock } from "@/lib/server/protocol";
 import { getLLMConfig, getSettings } from "@/lib/server/settings";
 import { tryOperationLock } from "@/lib/server/locks";
-import { acceptCoverage, COVERAGE_LABELS, prepareTutorMessages, recoverCoverage } from "@/lib/server/tutor-output";
-import { PACES, turnIntentForText, type TeachingCoverage, type TurnIntent, type TurnRequest } from "@/lib/types";
+import { acceptCoverage, prepareTutorMessages, recoverCoverage } from "@/lib/server/tutor-output";
+import { PACES, turnIntentForText, type CompletionCheck, type TeachingCoverage, type TurnIntent, type TurnRequest } from "@/lib/types";
 import type { BoardBlock, ProblemProgress, TurnAction, TurnEvent } from "@/lib/types";
 import { fullPlan, goalsFor, goalCovered, missingGoals } from "@/lib/server/learning-plan";
 import { requestPlan, legacyInventory } from "@/lib/server/session-plan";
 import { readChatInputRequest } from "@/lib/server/chat-input";
+import { confirmProblemCompletion } from "@/lib/server/session-completion";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -47,6 +48,8 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
   catch (error) { return Response.json({ error: error instanceof Error ? error.message : "讲解请求格式不正确。" }, { status: 400 }); }
   const { text, images } = parsed;
   const body = parsed.body as unknown as TurnRequest;
+  if (body.checkCompletion !== undefined && typeof body.checkCompletion !== "boolean") return Response.json({ error: "完成检查请求无效。" }, { status: 400 });
+  const checkOnly = body.checkCompletion === true;
   if (body.intent !== undefined && body.intent !== "complete_problem" && body.intent !== "goodbye") {
     return Response.json({ error: "无效的课堂意图。" }, { status: 400 });
   }
@@ -58,17 +61,37 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
   if (body.planVersion !== undefined && body.planVersion !== plan.version) return Response.json({ error: "学习计划已更新，请确认后重试。" }, { status: 409 });
   if (!problems.length) { await release(); return Response.json({ error: "该试卷还没有解析出题目" }, { status: 400 }); }
 
-  let cfg: LLMConfig;
-  try {
-    cfg = getLLMConfig(await getSettings(), "chat");
-  } catch (e) {
-    await release();
-    return Response.json({ error: (e as Error).message }, { status: 400 });
-  }
-
   const intent: TurnIntent | undefined = body.intent === "goodbye" || body.intent === "complete_problem"
     ? body.intent
     : turnIntentForText(text);
+  if (checkOnly && (intent || text || images.length)) return Response.json({ error: "完成检查不能附带提问或其他课堂动作。" }, { status: 400 });
+  const originalIdx = Math.min(Math.max(session.currentIdx, 0), problems.length - 1);
+  if (body.problemIdx !== undefined && (!Number.isInteger(body.problemIdx) || body.problemIdx < 0 || body.problemIdx >= problems.length)) {
+    return Response.json({ error: "题号无效。" }, { status: 400 });
+  }
+  if (checkOnly && body.problemIdx !== undefined && body.problemIdx !== originalIdx) return Response.json({ error: "题目已切换，请确认当前题后再检查。" }, { status: 400 });
+  if (checkOnly && !plan.units.some((unit) => unit.idx === originalIdx)) return Response.json({ error: "此题未纳入当前学习计划。" }, { status: 400 });
+  if (intent === "complete_problem") {
+    const target = body.problemIdx ?? originalIdx;
+    if (images.length) return Response.json({ error: "确认完成时不能附带图片，请单独发送问题。" }, { status: 400 });
+    if (!plan.units.some((unit) => unit.idx === target)) return Response.json({ error: "此题未纳入当前学习计划。" }, { status: 400 });
+    let events: TurnEvent[];
+    if (session.progress?.[String(target)] === "done") {
+      events = [{ type: "done", action: session.status === "completed" ? "finish" : "wait", session: toSessionDTO(session), intent }];
+    } else {
+      if (target !== originalIdx) return Response.json({ error: "题目已切换，请确认当前题后再继续。" }, { status: 400 });
+      if (!problems[target].solution) return Response.json({ error: "当前题尚未解析，请先确认补充解析。" }, { status: 409 });
+      req.signal.throwIfAborted();
+      events = await confirmProblemCompletion(session, plan, problems, target, text);
+    }
+    await release();
+    return new Response(events.map((event) => JSON.stringify(event)).join("\n") + "\n", {
+      headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+  let cfg: LLMConfig;
+  try { cfg = getLLMConfig(await getSettings(), "chat"); }
+  catch (e) { return Response.json({ error: (e as Error).message }, { status: 400 }); }
   let changedPlan = false;
   const requestedPace = PACES.find((p) => text.includes(p.name));
   const beforeIdx = session.currentIdx;
@@ -84,17 +107,6 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
   const problem = problems[idx];
   if (!problem.solution && intent !== "goodbye") return Response.json({ error: "当前题尚未解析，请先确认补充解析。" }, { status: 409 });
   const goals = goalsFor(plan, idx);
-  if (body.problemIdx !== undefined && (!Number.isInteger(body.problemIdx) || body.problemIdx < 0 || body.problemIdx >= problems.length)) {
-    return Response.json({ error: "题号无效。" }, { status: 400 });
-  }
-  if (intent === "complete_problem" && body.problemIdx !== undefined && session.progress?.[String(body.problemIdx)] === "done") {
-    await release();
-    const event: TurnEvent = { type: "done", action: session.status === "completed" ? "finish" : "wait", session: toSessionDTO(session), intent };
-    return new Response(JSON.stringify(event) + "\n", { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" } });
-  }
-  if (intent === "complete_problem" && body.problemIdx !== undefined && body.problemIdx !== idx) {
-    return Response.json({ error: "题目已切换，请确认当前题后再继续。" }, { status: 400 });
-  }
   let userRow: typeof messages.$inferSelect | null = null;
   if (text || images.length) {
     [userRow] = await db
@@ -112,7 +124,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
     .where(and(eq(boards.sessionId, sessionId), eq(boards.problemIdx, idx)));
 
   let pageImage: { mime: string; data: string } | null = null;
-  if (FIGURE_RE.test(problem.content)) {
+  if (!checkOnly && FIGURE_RE.test(problem.content)) {
     const [pg] = await db
       .select()
       .from(paperPages)
@@ -140,6 +152,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
     progress: session.progress ?? {},
     history,
     coverage: state.coverage,
+    completionConfirmation: session.completionConfirmations?.[String(idx)],
     intent,
     plan,
   });
@@ -251,7 +264,10 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
           } else if (b.tag === "covered") {
             if (intent !== "goodbye") {
               const goal = goals.find((g) => g.topic === b.attrs.topic);
-              if (goal) { const accepted: TeachingCoverage = {}; acceptCoverage(accepted, goal.topic, b.body.trim(), state.taught); if (accepted[goal.topic]) state.coverage[goal.id] = accepted[goal.topic]; }
+              if (goal) {
+                const accepted: TeachingCoverage = { [goal.topic]: state.coverage[goal.id] ?? "" };
+                if (acceptCoverage(accepted, goal.topic, b.body.trim(), state.taught)) state.coverage[goal.id] = accepted[goal.topic];
+              }
             }
           } else if (b.tag === "action") {
             state.actions++;
@@ -263,17 +279,19 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
       };
 
       try {
-        for await (const delta of streamChat(cfg, {
-          system,
-          messages: llmMessages,
-          maxTokens: 8192,
-          signal: upstream.signal,
-        })) {
-          await handle(parser.push(delta));
+        if (!checkOnly) {
+          for await (const delta of streamChat(cfg, {
+            system,
+            messages: llmMessages,
+            maxTokens: 8192,
+            signal: upstream.signal,
+          })) {
+            await handle(parser.push(delta));
+          }
+          await handle(parser.end());
         }
-        await handle(parser.end());
 
-        if (!state.count && !upstream.signal.aborted) {
+        if (!checkOnly && !state.count && !upstream.signal.aborted) {
           // Fallback: the model ignored the tag format – split plain text into short messages.
           const stray = stripTags(parser.stray()).trim();
           if (!stray) throw new Error("模型没有返回有效内容，请重试。");
@@ -285,13 +303,16 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
         if (state.actions > 1) throw new Error("导师返回了多个课程动作，请重试。");
         if (intent && state.actions !== 1) throw new Error("导师输出未完成，请重试。");
 
-        let finalAction: TurnAction = state.action ?? "wait";
+        let finalAction: TurnAction = checkOnly ? "finish" : state.action ?? "wait";
         if (intent === "goodbye") {
           finalAction = "wait";
         }
-        const completing = intent !== "goodbye" && (intent === "complete_problem" || finalAction === "next" || finalAction === "finish");
+        const completing = intent !== "goodbye" && (finalAction === "next" || finalAction === "finish");
         if ((intent || completing) && parser.stray().trim()) throw new Error("导师回复格式不完整，请重试。");
-        if (completing && missingGoals(plan, idx, state.coverage).length) {
+        const confirmation = session.completionConfirmations?.[String(idx)];
+        const required = missingGoals(plan, idx, state.coverage, confirmation);
+        let completionCheck: CompletionCheck | undefined;
+        if (completing && required.length) {
           const savedTeaching = await db
             .select({ content: messages.content })
             .from(messages)
@@ -302,17 +323,18 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
             Object.fromEntries(goals.filter((g) => goalCovered(g, idx, state.coverage)).map((g) => [g.topic, state.coverage[g.id] ?? state.coverage[g.topic]])),
             [...savedTeaching.map((row) => row.content), ...state.blocks.map((block) => block.md), ...state.taught],
             upstream.signal,
-            goals.map((g) => g.topic),
+            required.map((g) => g.topic),
             goals,
           );
-          for (const goal of goals) if (recovered[goal.topic]) state.coverage[goal.id] = recovered[goal.topic];
+          for (const goal of goals) if (recovered.coverage[goal.topic]) state.coverage[goal.id] = recovered.coverage[goal.topic];
+          completionCheck = { status: recovered.status, missingGoals: missingGoals(plan, idx, state.coverage, confirmation), ...(recovered.code ? { code: recovered.code } : {}) };
         }
         const coverage = { ...(session.coverage ?? {}), [String(idx)]: state.coverage };
-        const missing = missingGoals(plan, idx, state.coverage);
+        const missing = missingGoals(plan, idx, state.coverage, confirmation);
         if (completing && missing.length) {
           finalAction = "wait";
-          await insertTutorMessage(`这题还缺少${missing.map((goal) => COVERAGE_LABELS[goal.topic]).join("、")}的有效讲解记录。我们先补齐，再继续。`, "この問題の解説を最後まで確認してから、次へ進みましょう。");
         }
+        if (completing && !completionCheck) completionCheck = { status: "covered", missingGoals: [] };
         upstream.signal.throwIfAborted();
         let updated: SessionRow = session;
         if (completing && !missing.length) {
@@ -347,7 +369,7 @@ async function runTurn(req: Request, sessionId: number, release: () => Promise<v
             .where(eq(sessions.id, sessionId))
             .returning();
         }
-        send({ type: "done", action: finalAction, session: toSessionDTO(updated), intent });
+        send({ type: "done", action: finalAction, session: toSessionDTO(updated), intent, ...(completionCheck ? { completionCheck } : {}) });
       } catch (e) {
         if (!req.signal.aborted) {
           send({ type: "error", error: e instanceof Error ? e.message : String(e) });

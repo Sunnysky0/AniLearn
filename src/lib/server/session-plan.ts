@@ -2,7 +2,7 @@ import { eq, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { sessions, messages } from "@/db/schema";
 import { problemDivider } from "./data";
-import { fullPlan, makeLearningPlan, missingGoals } from "./learning-plan";
+import { fullPlan, makeLearningPlan, missingGoals, goalConfirmed } from "./learning-plan";
 import { getLLMConfig, getSettings } from "./settings";
 import type { LearningPlan, PaperInventory, ProblemDTO, TeachingPace } from "@/lib/types";
 import type { SessionRow } from "./data";
@@ -12,7 +12,11 @@ export function legacyInventory(problems: ProblemDTO[]): PaperInventory {
 }
 export async function applyPlan(session: SessionRow, plan: LearningPlan, problems: ProblemDTO[]) {
   const progress = { ...session.progress };
-  for (const unit of plan.units) if (missingGoals(plan, unit.idx, session.coverage[String(unit.idx)] ?? {}).length && progress[String(unit.idx)] === "done") progress[String(unit.idx)] = "pending";
+  for (const unit of plan.units) {
+    const confirmation = session.completionConfirmations?.[String(unit.idx)];
+    if (unit.goals.every((goal) => goalConfirmed(goal, confirmation))) progress[String(unit.idx)] = "done";
+    else if (missingGoals(plan, unit.idx, session.coverage[String(unit.idx)] ?? {}, confirmation).length && progress[String(unit.idx)] === "done") progress[String(unit.idx)] = "pending";
+  }
   const remaining = plan.units.filter((unit) => progress[String(unit.idx)] !== "done");
   const currentIdx = remaining.some((u) => u.idx === session.currentIdx) ? session.currentIdx : remaining[0]?.idx ?? session.currentIdx;
   if (remaining.length) progress[String(currentIdx)] = "active";

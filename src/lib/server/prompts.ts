@@ -1,8 +1,8 @@
-import { CORE_COVERAGE_TOPICS as COVERAGE_TOPICS, type BoardBlock, type TeachingCoverage, type TurnAction, type TurnIntent, type LearningPlan } from "@/lib/types";
+import { CORE_COVERAGE_TOPICS as COVERAGE_TOPICS, type BoardBlock, type TeachingCoverage, type TurnAction, type TurnIntent, type LearningPlan, type CompletionConfirmation } from "@/lib/types";
 import { speechStyleTag } from "@/lib/text";
 import { parseDataUrl, type LLMMessage, type LLMPart } from "./llm";
 import type { MessageRow, PaperRow, ProblemRow, TutorRow } from "./data";
-import { goalCovered } from "./learning-plan";
+import { goalCovered, goalConfirmed } from "./learning-plan";
 
 // ---------------------------------------------------------------------------
 // 1) Exam paper analysis
@@ -81,6 +81,7 @@ export interface TutorPromptCtx {
   progress: Record<string, string>;
   history: MessageRow[];
   coverage?: TeachingCoverage;
+  completionConfirmation?: CompletionConfirmation;
   intent?: TurnIntent;
   plan?: LearningPlan;
 }
@@ -145,7 +146,7 @@ export function buildTutorSystem(c: TutorPromptCtx): string {
 始终保持人设，用自然、口语化、有温度的简体中文和学生交流，称呼学生为“你”。
 
 # EPDL 教学规则
-${c.intent === "goodbye" ? "本轮学生明确结束本次交流。只回复 1~2 条简短告别消息，不再教学、不写板书、不要求补课、不切题，也不要声称未完成的题已经学完。最后只输出 <action>wait</action>。本条规则优先于下方教学阶段与推进规则。" : c.intent === "complete_problem" ? "本轮学生明确表示理解并要求完成当前题。已讲过的内容无需重复；若确实缺少目标内容，简短补齐。用短消息确认或总结，进度由服务器核验本次计划的目标证据后处理。" : ""}
+${c.intent === "goodbye" ? "本轮学生明确结束本次交流。只回复 1~2 条简短告别消息，不再教学、不写板书、不要求补课、不切题，也不要声称未完成的题已经学完。最后只输出 <action>wait</action>。本条规则优先于下方教学阶段与推进规则。" : ""}
 1. 按本次计划的代表题推进。当前目录位置 ${c.idx + 1}/${n}（题号 ${p.number}）。严格按具体目标确定讲解范围；只有条分缕析要求完整解法、知识、方法和易错点。其余档位围绕选定目标展开。
 2. 每道题开始时，由你决定教学方式：
    - 先练后讲（student_first）：告诉学生题目要点和一句思考方向，请他先独立尝试（可以文字作答，也可以拍照上传草稿），然后 wait。学生作答后先批改：指出对错和亮点，再针对薄弱处讲解。
@@ -223,10 +224,12 @@ ${phase}
 
 # 本题教学覆盖记录
 已覆盖：${planned ? planned.goals.filter((g) => goalCovered(g, c.idx, c.coverage ?? {})).map((g) => g.description).join("；") || "无" : COVERAGE_TOPICS.filter((topic) => c.coverage?.[topic]).join("、") || "无"}。
-尚未覆盖：${planned ? planned.goals.filter((g) => !goalCovered(g, c.idx, c.coverage ?? {})).map((g) => `${g.topic}：${g.description}`).join("；") || "无" : COVERAGE_TOPICS.filter((topic) => !c.coverage?.[topic]).join("、") || "无"}。
+学生本人确认完成：${planned?.goals.filter((g) => goalConfirmed(g, c.completionConfirmation)).map((g) => g.description).join("；") || "无"}。本人确认由服务器直接保存并推进，不是导师讲解证据；不要要求学生补讲已本人确认的目标。
+尚未完成：${planned ? planned.goals.filter((g) => !goalCovered(g, c.idx, c.coverage ?? {}) && !goalConfirmed(g, c.completionConfirmation)).map((g) => `${g.topic}：${g.description}`).join("；") || "无" : COVERAGE_TOPICS.filter((topic) => !c.coverage?.[topic]).join("、") || "无"}。
 solution=完整解法及答案；knowledge=教材知识点及依据；skills=方法技巧；pitfalls=易错点。
 讲到其中一项时，在对应消息或板书后输出 <covered topic="solution">逐字引用刚才中文消息或板书中能证明覆盖该项的文字</covered>。
 引用至少 6 个非空白字符，必须已经出现在本轮中文消息或板书中，不能编造，不能只用标题、问候或已经讲完的宣告作证据。示例中的四项标签仅在对应内容确实讲过时输出。
+一个目标涉及多个小问或步骤时，可以对同一 topic 输出多个独立引文标签。每段逐字引用本轮的一个消息或板书正文，不要跨消息拼接，也不要把标题包括在引文中；各段共同证明整个具体目标完成后才标记。
 服务器在完成判定时还会核对本题已保存的历史导师消息与板书，恢复漏记证据；这不代表可以跳过实际教学。
 每个具体目标只有实际完成后才能标记；practice 必须包含学生作答后的具体反馈。所有本题目标覆盖前不能 next 或 finish；本次计划仍有未完成目标时不能 finish。
 学生要求改变范围时，遵守系统提供的新计划；补充解析需由学生确认，未确认前继续原计划。`;
